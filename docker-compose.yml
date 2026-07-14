@@ -1,0 +1,37 @@
+# 스켈레톤 — 로컬 인프라. 추론 서빙(GPU)은 별도 repo라 제외.
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: aria
+      POSTGRES_PASSWORD: aria
+      POSTGRES_DB: aria
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    # payments는 별도 DB — 운영은 별도 인스턴스, 로컬은 같은 서버에 DB 분리
+
+  redis:
+    image: redis:7
+    ports: ["6379:6379"]
+
+  kafka:
+    image: apache/kafka:3.8.0   # KRaft 단일 노드
+    ports: ["9092:9092"]
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+
+  # api / generation-worker / media-worker (aria 이미지) · payments 는 이미지 확정 후 추가
+  # 관측성(SigNoz)·게이트웨이는 보류 — docs/architecture.md
+
+volumes:
+  pgdata:

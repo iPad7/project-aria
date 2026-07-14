@@ -1,0 +1,19 @@
+[project]
+name = "aria-workspace"
+version = "0.0.0"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.uv.workspace]
+members = ["apps/aria", "apps/payments"]
+
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = [
+    "import-linter>=2.13",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.15.21",
+]

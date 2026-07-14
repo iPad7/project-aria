@@ -1,0 +1,12 @@
+[importlinter]
+root_package = payments
+
+[importlinter:contract:layers]
+name = domain < application < adapter
+type = layers
+layers =
+    adapter
+    application
+    domain
+containers =
+    payments

@@ -1,0 +1,34 @@
+[importlinter]
+root_package = aria
+
+[importlinter:contract:context-layers]
+name = domain < application < adapter within each context
+type = layers
+layers =
+    adapter
+    application
+    domain
+containers =
+    aria.contexts.identity
+    aria.contexts.persona
+    aria.contexts.chat
+    aria.contexts.streaming
+    aria.contexts.wallet
+
+[importlinter:contract:context-independence]
+name = contexts must not import each other directly (go via common)
+type = independence
+modules =
+    aria.contexts.identity
+    aria.contexts.persona
+    aria.contexts.chat
+    aria.contexts.streaming
+    aria.contexts.wallet
+
+[importlinter:contract:common-kernel-purity]
+name = common (shared kernel) must not import contexts
+type = forbidden
+source_modules =
+    aria.common
+forbidden_modules =
+    aria.contexts
