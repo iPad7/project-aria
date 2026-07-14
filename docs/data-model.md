@@ -1,47 +1,228 @@
-# data-model
+# 데이터베이스 명세
 
-영구 데이터(PostgreSQL, SQLModel 겸용 + Alembic). 휘발 상태(세션·큐·토픽)는 Redis이며 여기 없음.
+영구 데이터 스키마. 휘발 상태(세션·큐·토픽)는 Redis이며 여기 없음. ERD 다이어그램은 `docs/erd.png`(첨부).
 
-> 페르소나 스키마는 레거시 `influencers` 앱에서 **정규화 설계를 계승**(살릴 자산). 나머지는 레거시 재현.
+## 개요
 
-## 페르소나 애그리게이트 (계승)
+- **DB 2개**: `aria` DB(앱 모놀리스 — identity·persona·community·chat·wallet) / `payments` DB(별도 서비스 — payment·outbox). 두 DB 간 FK 없음, **Kafka 이벤트로 연결**.
+- ORM: **SQLModel 겸용**(도메인 모델 ≒ 영속 엔티티), 마이그레이션 **Alembic**.
+- 규약: PK `id UUID`(**UUIDv7**, 앱 생성 — 시간순 정렬로 인덱스 지역성 + 전역 유일 + 비열거). 1:1 테이블은 FK가 PK. 시각은 `timestamptz`. 문자열 길이는 레거시 계승.
+- 컨텍스트 경계: 테이블은 소유 컨텍스트에 속함. 크로스컨텍스트는 **읽기(read model)** 로만(직접 FK 조인 지양).
 
-레거시 `persona_loader`가 조립하던 구조. `domain`의 핵심.
+---
 
-```
-Persona (Influencer)
-  name, age, gender, mbti, job, audience_term, origin_story
-  ├─ CoreValues        우선순위순 (다대다: Persona × Value)
-  ├─ CommunicationStyle  tone, sentence_length, question_style, directness, empathy_expression
-  ├─ MoralCompass        standard, rule_adherence, fairness
-  └─ PersonalityTrait    energy_direction, emotional_processing, interpersonal_attitude, …
-```
+## identity (aria DB)
 
-- `PersonaLLMPort`로 넘길 시스템 프롬프트는 이 애그리게이트에서 조립(레거시 `MASTER_PERSONA_PROMPT_TEMPLATE` 계승·정리).
-- **모델 버전은 여기 없다** — persona는 "누구"이고, 어떤 sLLM 버전으로 서빙할지는 ML 플랫폼(레지스트리)의 관심사. `docs/architecture.md` 참고.
-
-## 스트리밍 엔티티 (재현)
-
-| 엔티티 | 핵심 필드 | 비고 |
+### user
+| 컬럼 | 타입 | 제약/비고 |
 |---|---|---|
-| User | id, username, nickname, profile_image, credit | 인증(JWT), 후원 잔액 |
-| Room | id, persona_id, title, status(pending/live/finished), hls_url | 방송. `hls_url`은 HLS 송출용 |
-| ChatMessageLog | room_id, sender_id, content, created_at | 채팅 로그(영구). 실시간 전달은 pub/sub |
-| Story | id, user_id, title, body, status(pending/reading/done) | 사연(idle 진행). 레거시 중복정의 정리 |
-| Donation | id, user_id, room_id, amount, message, created_at | 후원 (크레딧 차감, 로컬 트랜잭션) |
-| Wallet | user_id, credit_balance | 잔액. 모놀리스(핫패스). payments 이벤트로 지급, 후원으로 차감 |
-| TTSSettings | persona_id, engine, voice, params… | 페르소나별. ElevenLabs 기본 |
+| id | uuid | PK |
+| username | varchar(150) | unique, not null |
+| email | varchar(254) | unique, nullable |
+| password_hash | varchar(255) | not null |
+| nickname | varchar(50) | not null |
+| profile_image_url | varchar(512) | nullable |
+| is_staff | bool | default false (관리자) |
+| created_at / updated_at | timestamptz | |
 
-> **payments 서비스는 별도 DB**(결제기록·outbox)를 소유한다. wallet(잔액)만 aria DB에. 둘은 Kafka 이벤트(`credit-purchase-confirmed`)로 연결 — `docs/events.md`.
+> **결정**: 크레딧 잔액은 여기 없다 → `wallet.wallet`으로 분리(레거시 `User.credit`에서 이동).
+
+---
+
+## persona (aria DB) — 레거시 `influencers` 정규화 계승
+
+### persona  *(레거시 Influencer)*
+| 컬럼 | 타입 | 제약/비고 |
+|---|---|---|
+| id | uuid | PK |
+| name | varchar(100) | unique, not null — 스트리머 식별자 = `PersonaLLMPort`의 `persona_id` |
+| age | int | nullable |
+| gender | varchar(10) | |
+| mbti | varchar(10) | |
+| job | varchar(100) | |
+| audience_term | varchar(50) | 시청자 애칭 |
+| origin_story | text | |
+| created_at / updated_at | timestamptz | |
+
+### core_value / persona_core_value  *(M:N + 우선순위)*
+| core_value | | |
+|---|---|---|
+| id | uuid | PK |
+| value_name | varchar(50) | unique, not null |
+
+| persona_core_value | | |
+|---|---|---|
+| id | uuid | PK |
+| persona_id | uuid | FK→persona, cascade |
+| core_value_id | uuid | FK→core_value |
+| priority | int | not null (정렬) |
+| — | — | unique(persona_id, core_value_id) |
+
+### communication_style / moral_compass / personality_trait  *(각 1:1 persona)*
+| 테이블 | PK | 주요 컬럼 |
+|---|---|---|
+| communication_style | persona_id (FK) | tone, sentence_length, question_style, directness(int 1~5), empathy_expression |
+| moral_compass | persona_id (FK) | standard, rule_adherence, fairness |
+| personality_trait | persona_id (FK) | energy_direction, emotional_processing, judgment_decision, interpersonal_attitude, openness, conscientiousness, emotional_stability, social_sensitivity, risk_preference, time_orientation |
+
+### tts_settings  *(1:1 persona, ElevenLabs)*
+| 컬럼 | 타입 | 비고 |
+|---|---|---|
+| persona_id | uuid | PK, FK→persona, cascade |
+| engine | varchar(50) | default 'elevenlabs' |
+| voice / voice_name / model | varchar(100) | |
+| stability / similarity / style | float | 0.0~1.0 |
+| speaker_boost / auto_play | bool | |
+| streaming_delay / tts_delay / chunk_size | int | ms·개 |
+| sync_mode | varchar(20) | real_time/after_complete/chunked |
+| updated_at | timestamptz | |
+
+---
+
+## community (aria DB) — 방송국
+
+### story  *(사연 게시판)*
+| 컬럼 | 타입 | 제약/비고 |
+|---|---|---|
+| id | uuid | PK |
+| persona_id | uuid | FK→persona, cascade, not null |
+| author_id | uuid | FK→user, nullable, **on delete set null** (탈퇴해도 글 유지) |
+| title | varchar(200) | not null |
+| content | text | not null |
+| is_anonymous | bool | default true |
+| relationship_stage | varchar(50) | nullable |
+| nickname | varchar(50) | nullable |
+| status | varchar(10) | default 'pending' — pending/reading/done (idle 낭독 상태) |
+| created_at | timestamptz | |
+| — | — | index (persona_id, created_at desc), (persona_id, status) |
+
+> `chat`의 idle이 `status='pending'` 사연을 **읽기 포트/이벤트**로 소비(→ 이벤트 명세서에서 확정). `community`가 소유.
+
+### like  *(좋아요)*
+| 컬럼 | 타입 | 제약/비고 |
+|---|---|---|
+| id | uuid | PK |
+| persona_id | uuid | FK→persona, cascade |
+| user_id | uuid | FK→user, cascade |
+| created_at | timestamptz | |
+| — | — | unique(persona_id, user_id) |
+
+### rankings (열혈순위) — **파생 read model, 테이블 없음**
+`SELECT persona_id, SUM(amount) FROM donation GROUP BY persona_id` 형태로 `wallet.donation`에서 집계.
+
+---
+
+## chat (aria DB)
+
+### chat_room
+| 컬럼 | 타입 | 제약/비고 |
+|---|---|---|
+| id | uuid | PK |
+| persona_id | uuid | FK→persona |
+| host_id | uuid | FK→user (호스트/관리자) |
+| name | varchar(255) | not null (방송 제목) |
+| description | text | nullable |
+| thumbnail_url | varchar(512) | nullable |
+| status | varchar(10) | default 'pending' — pending/live/finished |
+| hls_url | varchar(512) | nullable (HLS 송출) |
+| created_at | timestamptz | |
+| closed_at | timestamptz | nullable |
+
+### chat_message_log  *(채팅 로그, 영구)*
+| 컬럼 | 타입 | 제약/비고 |
+|---|---|---|
+| id | uuid | PK |
+| room_id | uuid | FK→chat_room, cascade |
+| sender_id | uuid | FK→user, nullable, set null |
+| content | text | not null |
+| created_at | timestamptz | index (room_id, created_at) |
+
+> 실시간 전달은 Redis pub/sub. 이 테이블은 영구 로그.
+
+### chat_room_log  *(입장/퇴장, P2)*
+| id | uuid PK | · room_id FK · user_id FK · action varchar(enter/exit) · timestamp |
+
+---
+
+## wallet (aria DB)
+
+### wallet  *(1:1 user, 잔액)*
+| 컬럼 | 타입 | 제약/비고 |
+|---|---|---|
+| user_id | uuid | PK, FK→user, cascade |
+| credit_balance | int | not null, default 0 (check ≥ 0) |
+| updated_at | timestamptz | |
+
+### credit_transaction  *(원장, append-only)*
+| 컬럼 | 타입 | 제약/비고 |
+|---|---|---|
+| id | uuid | PK |
+| user_id | uuid | FK→user |
+| delta | int | not null (+지급 / −사용) |
+| type | varchar(20) | purchase / donation / refund |
+| ref_id | varchar(64) | nullable (payment_id·donation_id) |
+| idempotency_key | varchar(64) | nullable, unique (멱등 지급) |
+| created_at | timestamptz | index (user_id, created_at) |
+
+### donation  *(후원=슈퍼챗 기록, 랭킹 소스)*
+| 컬럼 | 타입 | 제약/비고 |
+|---|---|---|
+| id | uuid | PK |
+| persona_id | uuid | FK→persona |
+| room_id | uuid | FK→chat_room, nullable |
+| donor_id | uuid | FK→user, nullable, set null |
+| amount | int | 크레딧, not null |
+| message | text | nullable |
+| created_at | timestamptz | index (persona_id, created_at) |
+
+> **결정**: donation을 wallet 컨텍스트에(크레딧 spend 기록). `community` 랭킹·`streaming` 표시가 읽음. 지급/사용의 정합은 `credit_transaction` 원장이 담당(잔액은 materialized).
+
+---
+
+## payments (**payments DB — 별도**)
+
+> aria DB와 FK 없음. `user_id`는 논리 참조. wallet과는 Kafka 이벤트(`credit-purchase-confirmed`)로만 연결.
+
+### payment  *(결제 saga 상태)*
+| 컬럼 | 타입 | 제약/비고 |
+|---|---|---|
+| id | uuid | PK |
+| user_id | uuid | 논리 참조 |
+| provider | varchar(20) | 'toss' |
+| provider_payment_key | varchar(200) | nullable |
+| amount_krw | int | 결제 금액 |
+| credits | int | 지급 예정 크레딧 |
+| status | varchar(20) | pending / confirmed / refund_pending / refunded / failed |
+| idempotency_key | varchar(64) | unique (webhook 멱등) |
+| created_at / updated_at | timestamptz | |
+
+### outbox  *(transactional outbox)*
+| 컬럼 | 타입 | 제약/비고 |
+|---|---|---|
+| id | uuid | PK |
+| aggregate_id | varchar(64) | payment.id |
+| event_type | varchar(50) | credit-purchase-confirmed 등 |
+| payload | jsonb | 이벤트 본문 |
+| status | varchar(10) | pending / published |
+| created_at | timestamptz | index (status, created_at) |
+| published_at | timestamptz | nullable |
+
+---
+
+## 관계 요약
+
+- user 1—1 wallet · user 1—N (story.author, donation.donor, chat_message_log.sender, credit_transaction)
+- persona 1—1 (communication_style, moral_compass, personality_trait, tts_settings) · 1—N (persona_core_value, story, like, donation, chat_room)
+- chat_room 1—N (chat_message_log, chat_room_log, donation)
+- payments DB(payment, outbox)는 독립 — 이벤트로만 연결
 
 ## 원칙
 
-- **SQLModel 겸용**(Lite): 도메인 모델 ≒ 영속 엔티티, 매핑 보일러플레이트 제거. 도메인 복잡도가 커지면 국소 분리.
-- **마이그레이션 = Alembic**(Django migration 대체).
-- **휘발 상태는 Redis**: `StreamSession`·큐·토픽 스레드는 DB에 넣지 않는다(수평확장). 레거시가 인메모리/클래스변수로 두던 것을 Redis로 외부화.
-- 레거시 모델 중복(`chat.Story` vs `influencers.Story`)은 단일 `Story`로 통합.
+- **SQLModel 겸용**(Lite): 도메인 복잡도가 커지면 국소적으로 엔티티 분리.
+- **Alembic** 마이그레이션(Django migration 대체).
+- **휘발 상태는 Redis**: `StreamSession`·요청/응답 큐·토픽 스레드는 DB에 넣지 않음(수평확장). 레거시 인메모리/클래스변수의 Redis 외부화.
+- **레거시 정리**: `chat.Story` vs `influencers.Story` 중복 → `community.story` 단일. `StreamerTTSSettings` vs `InfluencerTTSSettings` → `persona.tts_settings` 단일.
 
 ## 미확정
 
-- 크레딧/결제 원장 모델 상세
-- 페르소나 에셋(idle/감정 클립) 메타데이터 저장 위치
+- 크레딧 소수/환불 부분취소 정책, `credit_transaction` 잔액 재구성 검증 주기
