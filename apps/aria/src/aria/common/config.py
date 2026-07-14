@@ -6,7 +6,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_prefix="ARIA_", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env", env_prefix="ARIA_", extra="ignore"
+    )
 
     # Persistence / state
     database_url: str = "postgresql+psycopg://aria:aria@localhost:5432/aria"
