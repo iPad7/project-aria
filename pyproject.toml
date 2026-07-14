@@ -10,6 +10,10 @@ members = ["apps/aria", "apps/payments"]
 [tool.uv]
 package = false
 
+[tool.pytest.ini_options]
+addopts = "--import-mode=importlib"
+testpaths = ["apps/aria/tests", "apps/payments/tests"]
+
 [dependency-groups]
 dev = [
     "import-linter>=2.13",

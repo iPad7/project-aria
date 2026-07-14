@@ -17,7 +17,7 @@ jobs:
           enable-cache: true
 
       - name: Sync (workspace + dev)
-        run: uv sync
+        run: uv sync --all-packages
 
       - name: Lint (ruff)
         run: uv run ruff check
