@@ -2,11 +2,60 @@
 
 aria(모노레포: 앱 모놀리스 + payments 서비스)의 구조와 근거. 이 repo의 설계 원본.
 
+## 서비스 아키텍처
+
+```mermaid
+flowchart LR
+  viewer([Viewer])
+
+  subgraph aria[aria app monolith]
+    direction TB
+    api[api<br/>WS · REST]
+    gen[generation-worker]
+    media[media-worker]
+    wallet[wallet<br/>balance · ledger]
+    community[community<br/>story · like · ranking]
+  end
+
+  kafka[[Kafka]]
+  redis[(Redis pub/sub)]
+  inf[inference<br/>vLLM · OpenAI]
+  tts[ElevenLabs]
+  cdn[S3 · CloudFront]
+  payments[payments service]
+  toss[Toss PG]
+  obs[Observability<br/>OTel → SigNoz]
+  langfuse[Langfuse<br/>LLM traces]
+
+  viewer -->|chat WS| api
+  api -->|comment selected| kafka
+  kafka -->|response-requested| gen
+  gen -->|PersonaLLMPort| inf
+  gen -->|response-generated| kafka
+  kafka -->|deliver| media
+  media -->|TTS| tts
+  media -->|HLS| cdn
+  cdn -->|playback| viewer
+  api <-->|fanout| redis
+  media -.->|notify| redis
+  api -.->|idle · StoryFeedPort| community
+  viewer -->|superchat| wallet
+  wallet -->|rankings| community
+  viewer -->|pay| payments
+  payments <-->|charge · webhook| toss
+  payments -->|outbox → Kafka| kafka
+  kafka -->|credit-confirmed| wallet
+  aria -.->|traces · metrics · logs| obs
+  gen -.->|prompt · tokens · cost| langfuse
+```
+
+> GitHub이 위 Mermaid를 인라인 렌더. 렌더 이미지는 `docs/assets/architecture.png`, 소스는 `docs/assets/architecture.mmd`. 수정 후 `npx @mermaid-js/mermaid-cli -i docs/assets/architecture.mmd -o docs/assets/architecture.png -s 2`로 재렌더.
+
 ## 배포 단위 (모노레포 + 최소 MSA)
 
 | 단위 | 무엇 | 배포 | 왜 이 경계 |
 |---|---|---|---|
-| **aria 모놀리스** | contexts: identity·persona·chat·streaming·wallet | api / generation-worker / media-worker (같은 이미지) | 워커로 독립 스케일. wallet은 후원 핫패스라 여기 |
+| **aria 모놀리스** | contexts: identity·persona·community·chat·streaming·wallet | api / generation-worker / media-worker (같은 이미지) | 워커로 독립 스케일. wallet은 후원 핫패스라 여기 |
 | **payments 서비스** | Toss 결제 saga · outbox | 별도(별도 DB) | 경계가 이미 async, 보안/장애 격리 |
 | **inference 서빙** | vLLM 멀티-LoRA | 별도 repo(GPU) | GPU 하드 경계 |
 | **llmops** | 데이터셋→SFT→DPO→평가→레지스트리 | 별도 repo(GPU) | 배치·GPU |
@@ -23,6 +72,12 @@ aria(모노레포: 앱 모놀리스 + payments 서비스)의 구조와 근거. �
 - `common`은 컨텍스트를 import하지 않음(커널 순수성)
 
 `in`이 예약어라 필요 시 adapter 하위는 `inbound`/`outbound`.
+
+## 커뮤니티(방송국) 컨텍스트
+
+`community` = 스트리머별 팬덤 채널의 UGC(사연 게시판·좋아요·랭킹). `persona`(AI 캐릭터 설정)와 바뀌는 이유가 달라 별도 컨텍스트.
+- **Story(사연)** 는 `community`가 소유(게시판 CRUD). `chat`의 idle은 직접 import 없이 **읽기 포트/이벤트**로 pending 사연을 소비(FR-STATION-4 → FR-IDLE-2).
+- **랭킹(열혈순위)** 은 후원 이벤트 기반 read model.
 
 ## 앱 ↔ 추론 경계
 
