@@ -1,6 +1,6 @@
 # 인프라 설계 (예상)
 
-배포 토폴로지와 인프라 구성. 다이어그램은 `docs/infra.png`(첨부). 구조 근거는 `docs/architecture.md`.
+배포 토폴로지와 인프라 구성. 다이어그램은 `docs/assets/infra.png`. 구조 근거는 `docs/architecture.md`.
 
 ## 배포 단위 요약
 
