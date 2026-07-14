@@ -6,7 +6,7 @@ aria(모노레포: 앱 모놀리스 + payments 서비스)의 구조와 근거. �
 
 | 단위 | 무엇 | 배포 | 왜 이 경계 |
 |---|---|---|---|
-| **aria 모놀리스** | contexts: identity·persona·chat·streaming·wallet | api / generation-worker / media-worker (같은 이미지) | 워커로 독립 스케일. wallet은 후원 핫패스라 여기 |
+| **aria 모놀리스** | contexts: identity·persona·community·chat·streaming·wallet | api / generation-worker / media-worker (같은 이미지) | 워커로 독립 스케일. wallet은 후원 핫패스라 여기 |
 | **payments 서비스** | Toss 결제 saga · outbox | 별도(별도 DB) | 경계가 이미 async, 보안/장애 격리 |
 | **inference 서빙** | vLLM 멀티-LoRA | 별도 repo(GPU) | GPU 하드 경계 |
 | **llmops** | 데이터셋→SFT→DPO→평가→레지스트리 | 별도 repo(GPU) | 배치·GPU |
@@ -23,6 +23,12 @@ aria(모노레포: 앱 모놀리스 + payments 서비스)의 구조와 근거. �
 - `common`은 컨텍스트를 import하지 않음(커널 순수성)
 
 `in`이 예약어라 필요 시 adapter 하위는 `inbound`/`outbound`.
+
+## 커뮤니티(방송국) 컨텍스트
+
+`community` = 스트리머별 팬덤 채널의 UGC(사연 게시판·좋아요·랭킹). `persona`(AI 캐릭터 설정)와 바뀌는 이유가 달라 별도 컨텍스트.
+- **Story(사연)** 는 `community`가 소유(게시판 CRUD). `chat`의 idle은 직접 import 없이 **읽기 포트/이벤트**로 pending 사연을 소비(FR-STATION-4 → FR-IDLE-2).
+- **랭킹(열혈순위)** 은 후원 이벤트 기반 read model.
 
 ## 앱 ↔ 추론 경계
 
