@@ -6,7 +6,8 @@
 
 - **`develop`** = **기본 브랜치**. 활발한 개발의 통합 지점. 보호됨.
 - **`main`** = 릴리스/운영본. 통제된 승격만 받는다. 보호됨.
-- 작업 브랜치는 `develop`에서 딴다: `<type>/<scope>-<요약>` (kebab). 예: `feat/chat-ws-consumer`, `fix/payments-webhook-idempotency`.
+- 작업 브랜치는 `develop`에서 딴다: **`<type>/<이슈번호>-<작업>-<세부>`** (kebab). 예: `feat/31-payment-create-api`, `fix/48-chat-race-condition`.
+- **이슈를 먼저** 만들고 그 번호로 브랜치를 판다(트레이서빌리티). GitHub 이슈의 "Create a branch"로 만들면 자동 연결.
 
 ## 흐름
 
@@ -23,14 +24,15 @@ feature ──(squash & merge)──▶ develop ──(merge commit + tag)──
 - **`main`에서** `fix/...` 브랜치 → PR **to main** → merge → patch 태그(`vX.Y.Z+1`).
 - 그다음 **`main`을 `develop`으로 백머지**(develop 최신 유지). develop↔main이 real merge라 충돌 없음.
 
-## 커밋 — Conventional Commits
+## 커밋
 
-`<type>(<scope>): <요약>`
+**`<type>: <세부>`** — 스코프 없음. 영역은 브랜치(이슈번호)가 이미 나타낸다. 커밋은 작은 단위로 쌓는다.
 
 - **type**: feat · fix · docs · refactor · test · chore · ci · build · perf
-- **scope**: identity · persona · chat · streaming · wallet · payments · common · inference · infra · docs · ci
-- 예: `feat(chat): websocket consumer + redis fanout` · `fix(payments): make Toss webhook idempotent`
-- 본문에 **왜**. 파괴적 변경은 `!` 또는 `BREAKING CHANGE:`.
+- 예 (한 브랜치에서 누적): `feat: 서비스 로직 구현` → `fix: 동시성 이슈 처리` → `feat: 컨트롤러 구현`
+- 파괴적 변경은 `!` 또는 `BREAKING CHANGE:`.
+
+> **squash 주의**: feature→develop이 squash라 위 커밋들은 develop에서 **한 커밋으로 합쳐진다**. 따라서 develop 히스토리에 남는 건 **PR 제목**이다 → PR 제목도 `<type>: <요약>`으로 쓰고, 본문에 `Closes #<이슈>`를 넣어 이슈를 자동 종료·연결한다.
 
 ## PR
 
