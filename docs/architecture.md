@@ -2,6 +2,55 @@
 
 aria(모노레포: 앱 모놀리스 + payments 서비스)의 구조와 근거. 이 repo의 설계 원본.
 
+## 서비스 아키텍처
+
+```mermaid
+flowchart LR
+  viewer([Viewer])
+
+  subgraph aria[aria app monolith]
+    direction TB
+    api[api<br/>WS · REST]
+    gen[generation-worker]
+    media[media-worker]
+    wallet[wallet<br/>balance · ledger]
+    community[community<br/>story · like · ranking]
+  end
+
+  kafka[[Kafka]]
+  redis[(Redis pub/sub)]
+  inf[inference<br/>vLLM · OpenAI]
+  tts[ElevenLabs]
+  cdn[S3 · CloudFront]
+  payments[payments service]
+  toss[Toss PG]
+  obs[Observability<br/>OTel → SigNoz]
+  langfuse[Langfuse<br/>LLM traces]
+
+  viewer -->|chat WS| api
+  api -->|comment selected| kafka
+  kafka -->|response-requested| gen
+  gen -->|PersonaLLMPort| inf
+  gen -->|response-generated| kafka
+  kafka -->|deliver| media
+  media -->|TTS| tts
+  media -->|HLS| cdn
+  cdn -->|playback| viewer
+  api <-->|fanout| redis
+  media -.->|notify| redis
+  api -.->|idle · StoryFeedPort| community
+  viewer -->|superchat| wallet
+  wallet -->|rankings| community
+  viewer -->|pay| payments
+  payments <-->|charge · webhook| toss
+  payments -->|outbox → Kafka| kafka
+  kafka -->|credit-confirmed| wallet
+  aria -.->|traces · metrics · logs| obs
+  gen -.->|prompt · tokens · cost| langfuse
+```
+
+> GitHub이 위 Mermaid를 인라인 렌더. 렌더 이미지는 `docs/assets/architecture.png`, 소스는 `docs/assets/architecture.mmd`. 수정 후 `npx @mermaid-js/mermaid-cli -i docs/assets/architecture.mmd -o docs/assets/architecture.png -s 2`로 재렌더.
+
 ## 배포 단위 (모노레포 + 최소 MSA)
 
 | 단위 | 무엇 | 배포 | 왜 이 경계 |
