@@ -13,11 +13,13 @@ package = false
 [tool.pytest.ini_options]
 addopts = "--import-mode=importlib"
 testpaths = ["apps/aria/tests", "apps/payments/tests"]
+asyncio_mode = "auto"
 
 [dependency-groups]
 dev = [
     "import-linter>=2.13",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
+    "fakeredis>=2.26.0",
     "ruff>=0.15.21",
 ]
