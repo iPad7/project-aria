@@ -1,6 +1,6 @@
 from starlette.testclient import TestClient
 
-from aria.common.app import app
+from aria.app import app
 
 
 def test_health() -> None:
