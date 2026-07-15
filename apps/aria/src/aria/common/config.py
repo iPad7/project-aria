@@ -19,5 +19,10 @@ class Settings(BaseSettings):
     inference_base_urls: dict[str, str] = {}
     openai_api_key: str | None = None
 
+    # Auth. Dev default is intentionally insecure — override via ARIA_JWT_SECRET.
+    jwt_secret: str = "dev-insecure-do-not-use-in-production-secret"
+    jwt_algorithm: str = "HS256"
+    jwt_ttl_seconds: int = 3600
+
 
 settings = Settings()
