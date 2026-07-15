@@ -10,12 +10,14 @@ from fastapi import FastAPI
 
 from aria.common.exception_handler import register_exception_handlers
 from aria.contexts.identity.adapter.inbound.http.router import router as identity_router
+from aria.contexts.persona.adapter.inbound.http.router import router as persona_router
 
 
 def create_app() -> FastAPI:
     app = FastAPI(title="aria", version="0.1.0")
     register_exception_handlers(app)
     app.include_router(identity_router)
+    app.include_router(persona_router)
 
     @app.get("/health")
     async def health() -> dict[str, str]:

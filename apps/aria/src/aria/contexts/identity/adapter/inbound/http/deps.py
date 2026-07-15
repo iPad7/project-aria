@@ -8,12 +8,11 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import Depends
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlmodel import Session
 
+from aria.common.auth import Principal, get_current_principal
 from aria.common.config import settings
 from aria.common.db import get_session
-from aria.common.errors import UnauthorizedError
 from aria.contexts.identity.adapter.outbound.persistence.repository import (
     SqlModelUserRepository,
 )
@@ -32,7 +31,6 @@ _tokens = JwtTokenService(
     algorithm=settings.jwt_algorithm,
     ttl_seconds=settings.jwt_ttl_seconds,
 )
-_bearer = HTTPBearer(auto_error=False)
 
 
 def get_identity_service(
@@ -43,9 +41,7 @@ def get_identity_service(
 
 def get_current_user(
     service: Annotated[IdentityService, Depends(get_identity_service)],
-    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
+    principal: Annotated[Principal, Depends(get_current_principal)],
 ) -> User:
-    if credentials is None:
-        raise UnauthorizedError("인증이 필요합니다", code="not_authenticated")
-    user_id = _tokens.read_subject(credentials.credentials)
-    return service.get_user(user_id)
+    # 토큰 검증(누구인가)은 공통 authN이 하고, identity는 그 주체를 User로 해석한다.
+    return service.get_user(principal.user_id)
