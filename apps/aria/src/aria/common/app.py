@@ -8,7 +8,10 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
+from aria.common.exception_handler import register_exception_handlers
+
 app = FastAPI(title="aria", version="0.1.0")
+register_exception_handlers(app)
 
 
 @app.get("/health")

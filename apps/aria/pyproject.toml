@@ -13,6 +13,7 @@ dependencies = [
     "pydantic-settings>=2.14.2",
     "pyjwt>=2.13.0",
     "faststream[kafka]>=0.7.1",
+    "uuid-utils>=0.10.0",
 ]
 
 [project.scripts]
