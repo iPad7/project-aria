@@ -64,7 +64,7 @@ flowchart LR
 
 ## 레이어 (Hexagonal-Lite, 컨텍스트별 수직 슬라이스)
 
-각 컨텍스트가 자기 `domain / application(+port) / adapter`를 가진다. `common`은 공유 커널(설정, `EventBusPort`, 컴포지션 루트 `app`).
+각 컨텍스트가 자기 `domain / application(+port) / adapter`를 가진다. `common`은 공유 커널(설정·DB/Redis 클라이언트·인증(`auth`)·예외·SQLModel 믹스인·`EventBusPort`). 컴포지션 루트는 `common` 밖 `aria/app.py`(패키지 최상위)에 둔다 — common이 컨텍스트를 import하지 않도록.
 
 `import-linter`(`apps/aria/.importlinter`)가 강제:
 - 컨텍스트 내 `domain < application < adapter`
@@ -72,6 +72,16 @@ flowchart LR
 - `common`은 컨텍스트를 import하지 않음(커널 순수성)
 
 `in`이 예약어라 필요 시 adapter 하위는 `inbound`/`outbound`.
+
+### 컨텍스트 상호작용 규약
+
+컨텍스트는 서로 import하지 않는다. 공유가 필요하면 성격에 따라 셋 중 하나로 올린다.
+
+- **횡단 관심사 → `common`.** 인증(authN)이 대표 예: `common/auth.py`가 Bearer 토큰을 검증해 `Principal(user_id)`만 돌려준다. 어느 컨텍스트든 identity를 몰라도 "누가 요청했나"를 얻는다. 토큰 **발급은 identity**(로그인), **검증은 common** — 같은 secret, 책임 분리.
+- **단순 참조 → 불투명 id.** 다른 컨텍스트의 엔티티는 UUID로만 참조한다(예: `persona.owner_id` = identity의 user id). 전체 객체를 끌어오지 않고, **DB에서도 cross-context FK를 걸지 않는다**(인덱스만) — 독립을 물리 스키마까지.
+- **진짜 협력 → 이벤트.** 상태 변화 통지는 Kafka(`EventBusPort`)로(예: payments→wallet).
+
+합성 루트(`aria/app.py`)만이 common과 모든 컨텍스트를 함께 안다 — 그게 합성 루트의 일이라 common 밖 최상위에 둔다.
 
 ## 커뮤니티(방송국) 컨텍스트
 
