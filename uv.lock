@@ -138,6 +138,7 @@ version = "0.1.0"
 source = { editable = "apps/aria" }
 dependencies = [
     { name = "alembic" },
+    { name = "anyio" },
     { name = "email-validator" },
     { name = "fastapi" },
     { name = "faststream", extra = ["kafka"] },
@@ -155,6 +156,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "alembic", specifier = ">=1.18.5" },
+    { name = "anyio", specifier = ">=4.0" },
     { name = "email-validator", specifier = ">=2.2.0" },
     { name = "fastapi", specifier = ">=0.139.0" },
     { name = "faststream", extras = ["kafka"], specifier = ">=0.7.2" },

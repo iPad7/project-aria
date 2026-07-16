@@ -19,6 +19,7 @@ from contextlib import aclosing
 from typing import Annotated
 from uuid import UUID
 
+import anyio
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
@@ -70,57 +71,61 @@ async def chat_ws(
     # 구독을 먼저 성립시킨다 — 이후 발행분(자기 메시지 포함)을 유실 없이 받는다.
     stream = await broadcaster.subscribe(room_id)
 
+    # anyio 태스크 그룹으로 두 펌프를 돌린다 — Starlette가 anyio 위에서 돌므로
+    # 구조적 취소를 따라야 teardown이 깨끗하다(raw asyncio.create_task는 스코프 밖).
     async def pump_outbound() -> None:
-        async with aclosing(stream):
-            async for event in stream:
-                await websocket.send_json(event)
+        try:
+            async with aclosing(stream):
+                async for event in stream:
+                    await websocket.send_json(event)
+        except WebSocketDisconnect:
+            pass  # 소켓이 먼저 닫힘 — 취소로 정리된다
 
-    async def pump_inbound() -> None:
-        while True:
-            data = await websocket.receive_json()
-            try:
-                persona_id = UUID(data["persona_id"])
-                text = data["text"]
-                outcome = await service.handle_user_message(
-                    room_id=room_id,
-                    persona_id=persona_id,
-                    author_id=principal.user_id,
-                    text=text,
-                )
-            except (KeyError, ValueError, ValidationError) as exc:
-                # 잘못된 프레임은 연결을 끊지 않고 보낸 사람에게만 에러로 알린다(발행 안 함).
-                await websocket.send_json(
-                    {"error": {"code": "invalid_message", "message": str(exc)}}
-                )
-                continue
+    async def pump_inbound(task_group: anyio.abc.TaskGroup) -> None:
+        try:
+            while True:
+                data = await websocket.receive_json()
+                try:
+                    persona_id = UUID(data["persona_id"])
+                    text = data["text"]
+                    outcome = await service.handle_user_message(
+                        room_id=room_id,
+                        persona_id=persona_id,
+                        author_id=principal.user_id,
+                        text=text,
+                    )
+                except (KeyError, ValueError, ValidationError) as exc:
+                    # 잘못된 프레임은 끊지 않고 보낸 사람에게만 에러로 알린다(발행 안 함).
+                    await websocket.send_json(
+                        {"error": {"code": "invalid_message", "message": str(exc)}}
+                    )
+                    continue
 
-            await broadcaster.publish(
-                room_id,
-                {
-                    "type": "message",
-                    "room_id": str(room_id),
-                    "author_id": str(principal.user_id),
-                    "text": text,
-                },
-            )
-            if outcome.reply is not None:
                 await broadcaster.publish(
                     room_id,
                     {
-                        "type": "reply",
+                        "type": "message",
                         "room_id": str(room_id),
-                        "persona_id": str(persona_id),
-                        "text": outcome.reply.text,
-                        "model_version": outcome.reply.model_version,
+                        "author_id": str(principal.user_id),
+                        "text": text,
                     },
                 )
+                if outcome.reply is not None:
+                    await broadcaster.publish(
+                        room_id,
+                        {
+                            "type": "reply",
+                            "room_id": str(room_id),
+                            "persona_id": str(persona_id),
+                            "text": outcome.reply.text,
+                            "model_version": outcome.reply.model_version,
+                        },
+                    )
+        except WebSocketDisconnect:
+            pass  # 클라이언트 종료 — outbound 펌프까지 취소하고 핸들러를 끝낸다
+        finally:
+            task_group.cancel_scope.cancel()
 
-    inbound = asyncio.create_task(pump_inbound())
-    outbound = asyncio.create_task(pump_outbound())
-    try:
-        # 한쪽이 끝나면(대개 클라이언트 연결 종료) 나머지를 정리한다.
-        await asyncio.wait({inbound, outbound}, return_when=asyncio.FIRST_COMPLETED)
-    finally:
-        for task in (inbound, outbound):
-            task.cancel()
-        await asyncio.gather(inbound, outbound, return_exceptions=True)
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(pump_outbound)
+        tg.start_soon(pump_inbound, tg)
