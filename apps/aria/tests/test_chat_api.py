@@ -2,7 +2,7 @@ from collections.abc import Iterator
 from uuid import uuid4
 
 import pytest
-from fakeredis import FakeAsyncRedis
+from fakeredis import FakeAsyncRedis, FakeServer
 from starlette.testclient import TestClient
 
 from aria.app import create_app
@@ -23,7 +23,7 @@ def _auth_header() -> dict[str, str]:
 
 @pytest.fixture
 def client() -> Iterator[TestClient]:
-    fake = FakeAsyncRedis(decode_responses=True)
+    fake = FakeAsyncRedis(server=FakeServer(), decode_responses=True)
     app = create_app()
     app.dependency_overrides[get_redis] = lambda: fake
     # context manager로 열어 요청들이 하나의 이벤트 루프를 공유하게 한다(fakeredis 루프 바인딩).

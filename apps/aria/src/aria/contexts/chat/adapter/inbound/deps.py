@@ -14,10 +14,12 @@ from redis.asyncio import Redis
 from aria.common.redis import get_redis
 from aria.contexts.chat.adapter.outbound.inference.stub import StubPersonaLLM
 from aria.contexts.chat.adapter.outbound.redis.activity import RedisActivityTracker
+from aria.contexts.chat.adapter.outbound.redis.broadcast import RedisRoomBroadcaster
 from aria.contexts.chat.adapter.outbound.redis.coordinator import (
     RedisResponseCoordinator,
 )
 from aria.contexts.chat.application.port.out.activity import ActivityTracker
+from aria.contexts.chat.application.port.out.broadcast import RoomBroadcaster
 from aria.contexts.chat.application.service import ChatOrchestrationService
 
 # LLM 스텁은 무상태 → 모듈 싱글턴. 실제 추론 클라이언트로 교체되는 지점.
@@ -38,3 +40,9 @@ def get_chat_service(
         coordinator=RedisResponseCoordinator(redis),
         llm=_llm,
     )
+
+
+def get_room_broadcaster(
+    redis: Annotated[Redis, Depends(get_redis)],
+) -> RoomBroadcaster:
+    return RedisRoomBroadcaster(redis)
