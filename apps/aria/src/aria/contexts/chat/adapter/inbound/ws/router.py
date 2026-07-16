@@ -1,19 +1,21 @@
-"""chat WebSocket 전송 (async).
+"""chat WebSocket 전송 (async, pub/sub 팬아웃).
 
-라이브 채널. 조율 코어(ChatOrchestrationService)는 그대로 재사용하고 전송만 WS로
-바꾼다 — HTTP POST가 요청-응답 1회라면, 여기선 한 연결 위에서 메시지 루프를 돈다.
+라이브 채널. 조율 코어(ChatOrchestrationService)는 그대로 재사용하고 전송만 WS로 바꾼다.
 
 인증은 '첫 프레임' 방식: 연결 수락 후 클라이언트가 첫 메시지로 {"token": ...}를 보내면
 common의 principal_from_token으로 검증한다(토큰이 URL·로그에 남지 않음). 실패·타임아웃이면
 애플리케이션 close 코드로 끊는다.
 
-이 슬라이스는 보낸 클라이언트에게만 응답을 돌려준다. 방의 다른 접속자에게 퍼뜨리는
-pub/sub 팬아웃은 다음 슬라이스에서 이 연결 위에 얹는다.
+응답을 보낸 사람에게만 돌려주지 않는다 — 메시지·응답을 방 토픽에 발행하고, 그 방을
+구독한 모든 연결(프로세스를 넘어)로 흘린다. 그래서 연결마다 두 펌프를 동시에 돌린다:
+inbound(수신 → 조율 코어 → 발행), outbound(구독 스트림 → 소켓). 구독을 발행보다 먼저
+성립시켜(유실 방지) 보낸 사람도 자기 메시지를 스트림으로 되받는다(모두 같은 이벤트 순서).
 """
 
 from __future__ import annotations
 
 import asyncio
+from contextlib import aclosing
 from typing import Annotated
 from uuid import UUID
 
@@ -22,7 +24,11 @@ from pydantic import ValidationError
 
 from aria.common.auth import Principal, principal_from_token
 from aria.common.errors import UnauthorizedError
-from aria.contexts.chat.adapter.inbound.deps import get_chat_service
+from aria.contexts.chat.adapter.inbound.deps import (
+    get_chat_service,
+    get_room_broadcaster,
+)
+from aria.contexts.chat.application.port.out.broadcast import RoomBroadcaster
 from aria.contexts.chat.application.service import ChatOrchestrationService
 
 # 애플리케이션 정의 close 코드(4000~4999).
@@ -53,6 +59,7 @@ async def chat_ws(
     websocket: WebSocket,
     room_id: UUID,
     service: Annotated[ChatOrchestrationService, Depends(get_chat_service)],
+    broadcaster: Annotated[RoomBroadcaster, Depends(get_room_broadcaster)],
 ) -> None:
     await websocket.accept()
 
@@ -60,7 +67,15 @@ async def chat_ws(
     if principal is None:
         return
 
-    try:
+    # 구독을 먼저 성립시킨다 — 이후 발행분(자기 메시지 포함)을 유실 없이 받는다.
+    stream = await broadcaster.subscribe(room_id)
+
+    async def pump_outbound() -> None:
+        async with aclosing(stream):
+            async for event in stream:
+                await websocket.send_json(event)
+
+    async def pump_inbound() -> None:
         while True:
             data = await websocket.receive_json()
             try:
@@ -73,20 +88,39 @@ async def chat_ws(
                     text=text,
                 )
             except (KeyError, ValueError, ValidationError) as exc:
-                # 잘못된 프레임은 연결을 끊지 않고 에러 프레임으로 알린다.
+                # 잘못된 프레임은 연결을 끊지 않고 보낸 사람에게만 에러로 알린다(발행 안 함).
                 await websocket.send_json(
                     {"error": {"code": "invalid_message", "message": str(exc)}}
                 )
                 continue
 
-            reply = (
+            await broadcaster.publish(
+                room_id,
                 {
-                    "text": outcome.reply.text,
-                    "model_version": outcome.reply.model_version,
-                }
-                if outcome.reply is not None
-                else None
+                    "type": "message",
+                    "room_id": str(room_id),
+                    "author_id": str(principal.user_id),
+                    "text": text,
+                },
             )
-            await websocket.send_json({"accepted": outcome.accepted, "reply": reply})
-    except WebSocketDisconnect:
-        return
+            if outcome.reply is not None:
+                await broadcaster.publish(
+                    room_id,
+                    {
+                        "type": "reply",
+                        "room_id": str(room_id),
+                        "persona_id": str(persona_id),
+                        "text": outcome.reply.text,
+                        "model_version": outcome.reply.model_version,
+                    },
+                )
+
+    inbound = asyncio.create_task(pump_inbound())
+    outbound = asyncio.create_task(pump_outbound())
+    try:
+        # 한쪽이 끝나면(대개 클라이언트 연결 종료) 나머지를 정리한다.
+        await asyncio.wait({inbound, outbound}, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for task in (inbound, outbound):
+            task.cancel()
+        await asyncio.gather(inbound, outbound, return_exceptions=True)

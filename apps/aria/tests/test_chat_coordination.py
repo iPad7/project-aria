@@ -1,7 +1,7 @@
 from uuid import uuid4
 
 import pytest
-from fakeredis import FakeAsyncRedis
+from fakeredis import FakeAsyncRedis, FakeServer
 
 from aria.contexts.chat.adapter.outbound.redis.activity import RedisActivityTracker
 from aria.contexts.chat.adapter.outbound.redis.coordinator import (
@@ -12,7 +12,7 @@ from aria.contexts.chat.domain.source import ChatSource
 
 @pytest.fixture
 def redis() -> FakeAsyncRedis:
-    return FakeAsyncRedis(decode_responses=True)
+    return FakeAsyncRedis(server=FakeServer(), decode_responses=True)
 
 
 # --- ResponseCoordinator: 우선순위 단일-플라이트 + 펜싱 ---
