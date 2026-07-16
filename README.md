@@ -31,3 +31,20 @@ uv run lint-imports --config apps/aria/.importlinter
 uv run lint-imports --config apps/payments/.importlinter
 uv run pytest
 ```
+
+`uv run aria`만으로 `/health`는 뜨지만(연결은 지연), 회원가입·페르소나·채팅 등 상태를
+쓰는 기능은 Postgres·Redis가 필요합니다.
+
+## 로컬 인프라 (Postgres · Redis · 마이그레이션)
+
+```bash
+docker compose up -d postgres redis   # 로컬 인프라 (docker-compose.yml)
+
+cd apps/aria
+uv run alembic upgrade head           # 스키마 반영 (마이그레이션이 단일 소스)
+uv run uvicorn aria.app:app --reload  # http://localhost:8000
+```
+
+- 접속 정보는 `config.Settings` 기본값이 compose와 일치 — 로컬은 `.env` 없이 동작(운영은 `ARIA_*`로 override, `.env.example` 참고)
+- 스키마 변경 시 모델 수정 후 `uv run alembic revision --autogenerate -m "..."` → 생성된 마이그레이션 검토 → `upgrade head` (생성물은 ruff로 자동 정리됨)
+- 테스트는 인메모리 SQLite·fakeredis라 위 인프라 없이 `uv run pytest`로 실행됨
