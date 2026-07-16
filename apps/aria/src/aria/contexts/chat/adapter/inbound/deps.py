@@ -1,4 +1,8 @@
-"""chat 조립 — Redis 상태 어댑터와 LLM 스텁을 유스케이스에 주입."""
+"""chat inbound DI — 전송 중립.
+
+조율 서비스와 활동 트래커의 조립은 HTTP·WebSocket 어느 전송이든 동일하므로
+전송별 폴더가 아니라 inbound 최상위에 둔다(Redis 상태 어댑터 + LLM 스텁 주입).
+"""
 
 from __future__ import annotations
 
