@@ -1,6 +1,7 @@
 """chat HTTP 라우터 (async).
 
-WebSocket 전송은 이번 범위 밖 — HTTP로 조율 루프를 노출한다. 인증 주체가 작성자다.
+라이브 채널은 WebSocket 전송(`../ws/router.py`)이고, 여기 HTTP는 요청-응답 형태의
+단발 전송과 방 상태 조회를 제공한다(같은 조율 코어 재사용). 인증 주체가 작성자다.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends
 
 from aria.common.auth import Principal, get_current_principal
-from aria.contexts.chat.adapter.inbound.http.deps import (
+from aria.contexts.chat.adapter.inbound.deps import (
     get_activity_tracker,
     get_chat_service,
 )
