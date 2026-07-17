@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,6 +20,13 @@ class Settings(BaseSettings):
     # Empty -> OpenAI fallback behind PersonaLLMPort.
     inference_base_urls: dict[str, str] = {}
     openai_api_key: str | None = None
+
+    # Real generation behind PersonaLLMPort (A-1). vLLM serves an OpenAI-compatible
+    # API, so one adapter covers external OpenAI and self-hosted vLLM — only the
+    # base URL differs. Default "stub" keeps keyless local runs and CI green.
+    llm_backend: Literal["stub", "openai"] = "stub"
+    llm_base_url: str | None = None  # None -> api.openai.com; set -> vLLM/custom
+    llm_model: str = "gpt-4o-mini"  # A-2 target: "skt/A.X-4.0-Light"
 
     # Auth. Dev default is intentionally insecure — override via ARIA_JWT_SECRET.
     jwt_secret: str = "dev-insecure-do-not-use-in-production-secret"

@@ -8,7 +8,7 @@
 
 - [x] 기반 슬라이스 (#8) — 공통 커널 · identity(회원가입·로그인·JWT) · persona(CRUD·소유권) · chat 조율 골조(Redis 분산락·우선순위 선점·펜싱)
 - [x] 실시간 종단 + 인프라 (#15) — docker-compose·Alembic 실체화 · WebSocket 전송(첫 프레임 인증) · Redis pub/sub 팬아웃(서버 2대 수평확장 실증)
-- [ ] 다음 — Phase 3 후보(community 슬라이스 · 실제 vLLM 생성 · superchat 우선 토픽 · idle 스토리 피드 · WS 구독 공유 최적화)
+- [ ] 다음 (Phase 3, 순서 확정) — **A** 실제 생성(A-1 OpenAI 호환 어댑터로 `PersonaLLMPort` 실체화 → A-2 자체 vLLM 서빙) · **B** community 슬라이스(사연·좋아요·랭킹) · **C** superchat 우선 토픽 · 이후 **ML 플랫폼**(SFT·평가). 근거: 쓸 수 있는 걸 먼저 만들어 데이터·기준선을 확보한 뒤 자체 모델로 전환. WS 구독 공유 최적화는 부하가 실측되기 전이라 보류.
 
 ## 기능 로드맵
 
