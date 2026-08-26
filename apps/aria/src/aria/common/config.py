@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     llm_base_url: str | None = None  # None -> api.openai.com; set -> vLLM/custom
     llm_model: str = "gpt-4o-mini"  # A-2 target: "skt/A.X-4.0-Light"
 
+    # NFR-REL-3: keep answering when the self-hosted sLLM is down. The fallback is
+    # always real OpenAI (api.openai.com) -- hence no separate base URL. Default off
+    # so keyless local runs and CI stay green.
+    llm_fallback_enabled: bool = False
+    llm_fallback_model: str = "gpt-4o-mini"
+
     # Auth. Dev default is intentionally insecure — override via ARIA_JWT_SECRET.
     jwt_secret: str = "dev-insecure-do-not-use-in-production-secret"
     jwt_algorithm: str = "HS256"
