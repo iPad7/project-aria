@@ -1,6 +1,6 @@
 # 데이터베이스 명세
 
-영구 데이터 스키마. 휘발 상태(세션·큐·토픽)는 Redis이며 여기 없음. ERD 다이어그램은 `docs/assets/erd.png`(첨부 예정).
+영구 데이터 스키마. 휘발 상태(세션·큐·토픽)는 Redis이며 여기 없음. ERD 다이어그램은 아직 없다 — 아래 표가 단일 소스다.
 
 ## 개요
 
@@ -25,7 +25,7 @@
 | is_staff | bool | default false (관리자) |
 | created_at / updated_at | timestamptz | |
 
-> **결정**: 크레딧 잔액은 여기 없다 → `wallet.wallet`으로 분리(레거시 `User.credit`에서 이동).
+> **결정**: 크레딧 잔액은 여기 없다 → `wallet.wallet`으로 분리. 레거시도 이미 `UserWallet`·`CashLog`를 별도 모델로 두고 있었으므로(`User`에 credit 필드는 없었다), 새로 쪼갠 것이 아니라 **이미 분리돼 있던 것을 컨텍스트 경계로 승격**한 것이다.
 
 ---
 
