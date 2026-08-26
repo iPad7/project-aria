@@ -17,8 +17,12 @@ from sqlmodel import SQLModel
 from aria.common.config import settings
 
 # 테이블 모델 등록 (metadata 채우기). 새 테이블이 생기면 여기에 import 추가.
-from aria.contexts.identity.adapter.outbound.persistence import model as _identity  # noqa: F401
-from aria.contexts.persona.adapter.outbound.persistence import model as _persona  # noqa: F401
+from aria.contexts.identity.adapter.outbound.persistence import (
+    model as _identity,  # noqa: F401
+)
+from aria.contexts.persona.adapter.outbound.persistence import (
+    model as _persona,  # noqa: F401
+)
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)

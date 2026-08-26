@@ -10,6 +10,20 @@ members = ["apps/aria", "apps/payments"]
 [tool.uv]
 package = false
 
+[tool.ruff.lint]
+# 규칙 세트를 명시한다 — 툴 기본값이 릴리스마다 바뀌어도 CI가 흔들리지 않도록.
+# (ruff 0.16이 기본 select에 I·UP을 추가하며 실제로 CI가 깨졌다. #29)
+#
+# E4/E7/E9 = ruff의 기본 E 하위집합. E5(E501 줄 길이)는 일부러 뺀다 — 줄 길이는
+# `ruff format`이 관리하고, 포매터가 재배치하지 못하는 한국어 주석·독스트링만
+# 남아 오탐이 된다.
+select = ["E4", "E7", "E9", "F", "I", "UP"]
+
+[tool.ruff.lint.isort]
+# 워크스페이스 src 레이아웃(apps/*/src)은 자동 감지되지 않는다.
+# 선언하지 않으면 자사 패키지가 서드파티로 분류돼 import 블록이 뒤섞인다.
+known-first-party = ["aria", "payments"]
+
 [tool.pytest.ini_options]
 addopts = "--import-mode=importlib"
 testpaths = ["apps/aria/tests", "apps/payments/tests"]

@@ -11,7 +11,7 @@ sa_type + sa_column_kwargs를 써서 서브클래스마다 Column이 새로 만�
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import DateTime, func
 from sqlmodel import Field, SQLModel
@@ -29,13 +29,13 @@ class TimestampMixin(SQLModel):
     """생성/수정 시각 — 값은 DB(server_default/onupdate)에 맡기는 게 관용구."""
 
     created_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
+        default_factory=lambda: datetime.now(UTC),
         sa_type=DateTime(timezone=True),
         sa_column_kwargs={"server_default": func.now()},
         nullable=False,
     )
     updated_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
+        default_factory=lambda: datetime.now(UTC),
         sa_type=DateTime(timezone=True),
         sa_column_kwargs={"server_default": func.now(), "onupdate": func.now()},
         nullable=False,
