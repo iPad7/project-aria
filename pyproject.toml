@@ -34,6 +34,6 @@ dev = [
     "import-linter>=2.13",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
-    "fakeredis>=2.26.0",
-    "ruff>=0.15.21",
+    "fakeredis>=2.37.1",
+    "ruff>=0.16.4",
 ]
