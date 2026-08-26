@@ -13,7 +13,7 @@ app은 뒤가 GPT든 SFT한 sLLM이든 구분하지 못한다(포트의 요점).
 
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 
 from openai import AsyncOpenAI
 

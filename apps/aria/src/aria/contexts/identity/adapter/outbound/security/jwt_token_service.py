@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import jwt
@@ -15,7 +15,7 @@ class JwtTokenService:
         self._ttl_seconds = ttl_seconds
 
     def issue_access_token(self, user_id: UUID) -> str:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         payload = {
             "sub": str(user_id),
             "iat": now,

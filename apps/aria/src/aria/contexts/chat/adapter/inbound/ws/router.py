@@ -46,7 +46,7 @@ async def _authenticate(websocket: WebSocket) -> Principal | None:
     try:
         frame = await asyncio.wait_for(websocket.receive_json(), timeout=_AUTH_TIMEOUT)
         return principal_from_token(frame["token"])
-    except (TimeoutError, asyncio.TimeoutError):
+    except TimeoutError:
         await websocket.close(code=_CLOSE_AUTH_TIMEOUT)
     except (UnauthorizedError, KeyError, ValueError, TypeError):
         await websocket.close(code=_CLOSE_UNAUTHORIZED)
