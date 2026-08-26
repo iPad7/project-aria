@@ -1,8 +1,11 @@
 """EventBusPort — shared-kernel port for the durable event backbone (Kafka).
 
-Contexts publish/subscribe domain events through this port; the FastStream/Kafka
-adapter implements it. Keeps domain/application ignorant of Kafka.
-See docs/architecture.md, docs/events.md.
+Contexts publish domain events through this port; the FastStream/Kafka adapter
+implements it. Keeps domain/application ignorant of Kafka.
+
+Publish-only for now -- consumption happens in worker entrypoints (generation /
+media / wallet), which are not built yet. A ``subscribe`` counterpart lands with
+the first worker. See docs/architecture.md, docs/events.md.
 """
 
 from __future__ import annotations
