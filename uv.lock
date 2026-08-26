@@ -163,7 +163,7 @@ requires-dist = [
     { name = "faststream", extras = ["kafka"], specifier = ">=0.7.2" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "openai", specifier = ">=1.55.0" },
-    { name = "psycopg", extras = ["binary"], specifier = ">=3.2.0" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.3.4" },
     { name = "pwdlib", extras = ["argon2"], specifier = ">=0.3.0" },
     { name = "pydantic-settings", specifier = ">=2.14.2" },
     { name = "pyjwt", specifier = ">=2.13.0" },
