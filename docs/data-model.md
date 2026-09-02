@@ -85,8 +85,8 @@
 | 컬럼 | 타입 | 제약/비고 |
 |---|---|---|
 | id | uuid | PK |
-| persona_id | uuid | FK→persona, cascade, not null |
-| author_id | uuid | FK→user, nullable, **on delete set null** (탈퇴해도 글 유지) |
+| persona_id | uuid | not null, **인덱스만**(cross-context FK 없음) |
+| author_id | uuid | nullable, 인덱스만 — 탈퇴 시 앱이 None으로 (탈퇴해도 글 유지) |
 | title | varchar(200) | not null |
 | content | text | not null |
 | is_anonymous | bool | default true |
@@ -96,7 +96,9 @@
 | created_at | timestamptz | |
 | — | — | index (persona_id, created_at desc), (persona_id, status) |
 
-> `chat`의 idle이 `status='pending'` 사연을 **읽기 포트/이벤트**로 소비(→ 이벤트 명세서에서 확정). `community`가 소유.
+> `chat`의 idle이 `status='pending'` 사연을 **읽기 포트**로 소비(`docs/events.md`에서 확정). `community`가 소유.
+
+> **cross-context FK를 걸지 않는다.** `persona_id`·`author_id`는 다른 컨텍스트의 엔티티를 가리키지만 불투명 UUID일 뿐이고, 참조 무결성은 애플리케이션 규칙으로 지킨다 — 컨텍스트 독립을 물리 스키마까지 관철하기 위해서다(`docs/architecture.md`의 상호작용 규약). 아래 chat·wallet 절의 FK 표기도 같은 규약을 따라야 하며, 각 슬라이스 구현 시 정정한다.
 
 ### like  *(좋아요)*
 | 컬럼 | 타입 | 제약/비고 |

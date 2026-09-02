@@ -11,6 +11,9 @@ from fastapi import FastAPI
 from aria.common.exception_handler import register_exception_handlers
 from aria.contexts.chat.adapter.inbound.http.router import router as chat_router
 from aria.contexts.chat.adapter.inbound.ws.router import router as chat_ws_router
+from aria.contexts.community.adapter.inbound.http.router import (
+    router as community_router,
+)
 from aria.contexts.identity.adapter.inbound.http.router import router as identity_router
 from aria.contexts.persona.adapter.inbound.http.router import router as persona_router
 
@@ -22,6 +25,7 @@ def create_app() -> FastAPI:
     app.include_router(persona_router)
     app.include_router(chat_router)
     app.include_router(chat_ws_router)
+    app.include_router(community_router)
 
     @app.get("/health")
     async def health() -> dict[str, str]:
