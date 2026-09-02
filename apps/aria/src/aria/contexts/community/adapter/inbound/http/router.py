@@ -15,12 +15,21 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, status
 
 from aria.common.auth import Principal, get_current_principal
-from aria.contexts.community.adapter.inbound.http.deps import get_story_service
+from aria.common.errors import NotFoundError
+from aria.contexts.community.adapter.inbound.http.deps import (
+    get_like_service,
+    get_story_service,
+)
 from aria.contexts.community.adapter.inbound.http.schema import (
+    LikeCountResponse,
     StoryResponse,
     SubmitStoryRequest,
 )
-from aria.contexts.community.application.service import MAX_PAGE_SIZE, StoryService
+from aria.contexts.community.application.service import (
+    MAX_PAGE_SIZE,
+    LikeService,
+    StoryService,
+)
 from aria.contexts.community.domain.model import Story
 
 router = APIRouter(prefix="/stories", tags=["community"])
@@ -75,3 +84,48 @@ def get_story(
     service: Annotated[StoryService, Depends(get_story_service)],
 ) -> StoryResponse:
     return _to_response(service.get(story_id))
+
+
+# 좋아요는 URL상 페르소나에 매달리지만 소유 컨텍스트는 community다.
+# REST 경로는 자원의 계층을 나타내는 것이지 내부 컨텍스트 경계를 나타내지 않는다.
+like_router = APIRouter(prefix="/personas/{persona_id}/likes", tags=["community"])
+
+
+@like_router.put("", status_code=status.HTTP_204_NO_CONTENT)
+def like_persona(
+    persona_id: UUID,
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    service: Annotated[LikeService, Depends(get_like_service)],
+) -> None:
+    # PUT이라 멱등하다 — 이미 눌렀어도 204. 재시도해도 안전하다.
+    service.like(persona_id, principal.user_id)
+
+
+@like_router.delete("", status_code=status.HTTP_204_NO_CONTENT)
+def unlike_persona(
+    persona_id: UUID,
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    service: Annotated[LikeService, Depends(get_like_service)],
+) -> None:
+    # DELETE도 멱등 — 안 눌린 상태에서 취소해도 204.
+    service.unlike(persona_id, principal.user_id)
+
+
+@like_router.get("", response_model=LikeCountResponse)
+def count_likes(
+    persona_id: UUID,
+    service: Annotated[LikeService, Depends(get_like_service)],
+) -> LikeCountResponse:
+    # 공개 — 방송국 페이지가 비로그인 시청자에게도 보여야 한다(FR-STATION-1).
+    return LikeCountResponse(persona_id=persona_id, count=service.count(persona_id))
+
+
+@like_router.get("/me", status_code=status.HTTP_204_NO_CONTENT)
+def my_like(
+    persona_id: UUID,
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    service: Annotated[LikeService, Depends(get_like_service)],
+) -> None:
+    """내가 눌렀는지. 눌렀으면 204, 아니면 404."""
+    if not service.liked_by(persona_id, principal.user_id):
+        raise NotFoundError("좋아요를 누르지 않았습니다", code="like_not_found")

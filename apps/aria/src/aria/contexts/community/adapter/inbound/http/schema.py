@@ -35,3 +35,8 @@ class StoryResponse(SchemaBase):
     relationship_stage: str | None
     nickname: str | None
     status: str
+
+
+class LikeCountResponse(SchemaBase):
+    persona_id: UUID
+    count: int

@@ -35,6 +35,18 @@ class PersonaService:
             )
         return persona
 
+    def get_public(self, persona_id: UUID) -> Persona:
+        """공개 조회 — 소유권을 묻지 않는다.
+
+        방송국 페이지는 비로그인 시청자에게도 보여야 한다(FR-STATION-1). 관리용
+        `get_owned`와 별개로 두어, 소유권 검사가 필요한 곳에서 실수로 이걸 쓰지
+        않도록 이름으로 구분한다.
+        """
+        persona = self._personas.get_by_id(persona_id)
+        if persona is None:
+            raise NotFoundError("페르소나를 찾을 수 없습니다", code="persona_not_found")
+        return persona
+
     def update(
         self,
         owner_id: UUID,

@@ -28,3 +28,14 @@ class PersonaResponse(SchemaBase):
     tagline: str
     description: str
     is_active: bool
+
+
+class PublicPersonaResponse(SchemaBase):
+    """공개 프로필. `owner_id`를 노출하지 않는다 — 시청자가 알 필요가 없고,
+    다른 컨텍스트(identity)의 식별자를 공개면으로 흘리지 않기 위해서다."""
+
+    id: UUID
+    name: str
+    tagline: str
+    description: str
+    is_active: bool

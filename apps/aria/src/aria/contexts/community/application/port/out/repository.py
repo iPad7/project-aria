@@ -8,6 +8,22 @@ from uuid import UUID
 from aria.contexts.community.domain.model import Story
 
 
+class LikeRepository(Protocol):
+    """좋아요 영속성.
+
+    add/remove는 **멱등**이다 — 이미 눌렀는데 또 눌러도, 안 눌렀는데 취소해도
+    예외 없이 같은 상태로 수렴한다. HTTP PUT/DELETE의 의미와 맞춘 것이다.
+    """
+
+    def add(self, persona_id: UUID, user_id: UUID) -> None: ...
+
+    def remove(self, persona_id: UUID, user_id: UUID) -> None: ...
+
+    def exists(self, persona_id: UUID, user_id: UUID) -> bool: ...
+
+    def count_by_persona(self, persona_id: UUID) -> int: ...
+
+
 class StoryRepository(Protocol):
     def add(self, story: Story) -> None: ...
 
