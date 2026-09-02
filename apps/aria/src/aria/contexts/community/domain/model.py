@@ -49,3 +49,14 @@ class Story(Entity):
         누가 썼는지는 남아 있어야 하기 때문이다.
         """
         return None if self.is_anonymous else self.author_id
+
+
+class Like(Entity):
+    """스트리머(페르소나)에 대한 좋아요.
+
+    (persona_id, user_id) 한 쌍당 하나만 존재한다 — 유일 제약으로 강제한다.
+    좋아요/취소는 토글이 아니라 멱등 연산이라, 같은 요청이 두 번 와도 결과가 같다.
+    """
+
+    persona_id: UUID
+    user_id: UUID
