@@ -59,16 +59,24 @@
 
 idle이 사연을 읽는 흐름은 Kafka가 아니라 **동기 읽기 포트**로 한다.
 
-- `chat`의 application에 `StoryFeedPort` 정의: `claim_next_pending(persona_id) -> Story | None`, `mark_done(story_id)`.
-- `community`가 어댑터로 구현(Story 소유·상태 전이 `pending→reading→done`). **composition root(common)에서 배선** → `chat ↛ community` import 규칙 유지.
+- **`StoryFeedPort`는 `common/story_feed.py`에 둔다**: `claim_next_pending(persona_id) -> PendingStory | None`, `mark_done(story_id)`. 둘 다 async.
+- `community`가 어댑터로 구현(Story 소유·상태 전이 `pending→reading→done`). **배선은 합성 루트 `aria/app.py`**.
 - 근거: 사연은 저볼륨이고 "다음 pending 하나 claim"이 이벤트 큐보다 자연스러움. 게시판 쓰기는 community, 낭독 소비는 chat이 포트로.
+
+> **포트를 소비자(chat) 쪽에 두지 않는 이유.** 독립성 계약은 **양방향**이다 — 포트를 `chat.application`에 두면 구현자인 community가 그것을 import해야 하고, 그 순간 `community ↛ chat`이 깨진다(import-linter로 실측 확인). 그래서 계약이 양쪽 밖, 즉 커널에 산다. `EventBusPort`와 같은 자리이며 "컨텍스트 간 경유는 `common`(이벤트/포트)"이라는 규약 그대로다.
+
+> **합성 루트는 `common`이 아니라 `aria/app.py`다.** common은 컨텍스트를 import할 수 없으므로(`common-kernel-purity`) 거기서 조립할 수 없다.
+
+> **DTO는 community의 `Story`가 아니다.** 도메인 객체를 그대로 넘기면 chat이 community 타입을 알게 된다. 낭독에 필요한 것만 담은 `PendingStory`를 common에 두고 어댑터가 변환한다 — `PersonaLLMPort`가 `Message`/`LLMResult`를 두고 OpenAI 타입과 매핑하는 것과 같다.
+
+> **claim은 원자적이어야 한다.** 인스턴스가 여럿이면 같은 사연을 두 번 읽을 수 있다. `SELECT … FOR UPDATE SKIP LOCKED LIMIT 1` 후 상태 전이(표준 큐 claim 패턴). `(persona_id, status)` 인덱스가 이를 받친다.
 
 ---
 
 ## 포트
 
-- `EventBusPort`(`aria.common.eventbus`) — Kafka publish/subscribe(FastStream 어댑터). 도메인/애플리케이션은 Kafka를 모름.
-- `StoryFeedPort`(`chat.application`) — 위 사연 소비.
+- `EventBusPort`(`aria.common.eventbus`) — Kafka publish(FastStream 어댑터). 도메인/애플리케이션은 Kafka를 모름. 소비는 워커 진입점이 생길 때 추가.
+- `StoryFeedPort`(`aria.common.story_feed`) — 위 사연 소비. community가 구현, chat이 소비, `aria/app.py`가 배선.
 
 ## 미확정
 

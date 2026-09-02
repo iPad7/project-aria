@@ -67,6 +67,46 @@ class SqlModelStoryRepository:
         ).all()
         return [_to_domain(row) for row in rows]
 
+    def claim_next_pending(self, persona_id: UUID) -> Story | None:
+        # 표준 큐 claim 패턴: 잠글 수 있는 가장 오래된 pending 하나를 집는다.
+        # SKIP LOCKED 덕에 인스턴스가 여럿이어도 서로 다른 사연을 가져간다 — 없으면
+        # 둘이 같은 행을 기다렸다가 하나는 빈손으로 끝난다.
+        #
+        # SQLite에는 FOR UPDATE가 없다(테스트 환경). 그쪽은 단일 커넥션이라 경합이
+        # 없으므로 잠금 없이 같은 로직을 쓴다.
+        stmt = (
+            select(StoryTable)
+            .where(
+                StoryTable.persona_id == persona_id,
+                StoryTable.status == StoryStatus.PENDING.value,
+            )
+            .order_by(col(StoryTable.created_at))  # 오래된 사연부터
+            .limit(1)
+        )
+        if (
+            self._session.bind is not None
+            and self._session.bind.dialect.name != "sqlite"
+        ):
+            stmt = stmt.with_for_update(skip_locked=True)
+
+        row = self._session.exec(stmt).first()
+        if row is None:
+            return None
+
+        row.status = StoryStatus.READING.value
+        self._session.add(row)
+        self._session.commit()
+        self._session.refresh(row)
+        return _to_domain(row)
+
+    def mark_done(self, story_id: UUID) -> None:
+        row = self._session.get(StoryTable, story_id)
+        if row is None or row.status == StoryStatus.DONE.value:
+            return  # 멱등 — 이미 끝났거나 없으면 그대로 둔다
+        row.status = StoryStatus.DONE.value
+        self._session.add(row)
+        self._session.commit()
+
 
 class SqlModelLikeRepository:
     """LikeRepository의 SQLModel 구현.
