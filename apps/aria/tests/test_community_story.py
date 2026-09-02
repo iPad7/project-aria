@@ -117,6 +117,22 @@ def test_list_is_public_and_scoped_to_persona(client: TestClient) -> None:
     assert "다른 방송국" not in titles
 
 
+def test_list_is_newest_first(client: TestClient) -> None:
+    # 게시판이라 최신 사연이 위에 와야 한다. 복합 인덱스
+    # (persona_id, created_at DESC)도 이 정렬을 전제로 만들어져 있다.
+    headers = _auth_headers(client, "g@example.com")
+    persona_id = str(uuid4())
+    for i in range(3):
+        _submit(client, headers, persona_id=persona_id, title=f"사연 {i}")
+
+    titles = [
+        s["title"]
+        for s in client.get("/stories", params={"persona_id": persona_id}).json()
+    ]
+
+    assert titles == ["사연 2", "사연 1", "사연 0"]
+
+
 def test_list_paginates(client: TestClient) -> None:
     headers = _auth_headers(client, "d@example.com")
     persona_id = str(uuid4())
@@ -130,6 +146,12 @@ def test_list_paginates(client: TestClient) -> None:
 
     assert len(page) == 2
     assert len(rest) == 1
+    # 페이지가 겹치거나 빠뜨리지 않는다.
+    assert [s["title"] for s in page] + [s["title"] for s in rest] == [
+        "사연 2",
+        "사연 1",
+        "사연 0",
+    ]
 
 
 def test_list_rejects_oversized_limit(client: TestClient) -> None:
