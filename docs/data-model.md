@@ -148,36 +148,44 @@
 
 ## wallet (aria DB)
 
-### wallet  *(1:1 user, 잔액)*
+> `user_id`·`persona_id`·`room_id`는 **FK가 아니다** — 위 community 절과 같은 규약(불투명 UUID + 인덱스만).
+
+### wallet_wallet  *(1:1 user, 잔액)*
 | 컬럼 | 타입 | 제약/비고 |
 |---|---|---|
-| user_id | uuid | PK, FK→user, cascade |
-| credit_balance | int | not null, default 0 (check ≥ 0) |
-| updated_at | timestamptz | |
+| user_id | uuid | PK (대리키 없음 — 사용자당 지갑 하나) |
+| credit_balance | int | not null, default 0, **check ≥ 0** |
+| created_at / updated_at | timestamptz | |
 
-### credit_transaction  *(원장, append-only)*
+### wallet_credit_transaction  *(원장, append-only)*
 | 컬럼 | 타입 | 제약/비고 |
 |---|---|---|
 | id | uuid | PK |
-| user_id | uuid | FK→user |
+| user_id | uuid | index (아래 복합 인덱스 선두) |
 | delta | int | not null (+지급 / −사용) |
-| type | varchar(20) | purchase / donation / refund |
+| type | varchar | purchase / grant / donation / refund |
 | ref_id | varchar(64) | nullable (payment_id·donation_id) |
-| idempotency_key | varchar(64) | nullable, unique (멱등 지급) |
-| created_at | timestamptz | index (user_id, created_at) |
+| idempotency_key | varchar(64) | nullable, **unique** (멱등 지급의 유일한 관문) |
+| created_at / updated_at | timestamptz | `ix_wallet_credit_transaction_user_created` (user_id, created_at DESC) |
 
-### donation  *(후원=슈퍼챗 기록, 랭킹 소스)*
+### wallet_donation  *(후원=슈퍼챗 기록, 랭킹 소스)*
 | 컬럼 | 타입 | 제약/비고 |
 |---|---|---|
 | id | uuid | PK |
-| persona_id | uuid | FK→persona |
-| room_id | uuid | FK→chat_room, nullable |
-| donor_id | uuid | FK→user, nullable, set null |
-| amount | int | 크레딧, not null |
-| message | text | nullable |
-| created_at | timestamptz | index (persona_id, created_at) |
+| persona_id | uuid | 복합 인덱스 선두 |
+| room_id | uuid | nullable, index |
+| donor_id | uuid | nullable, index (탈퇴해도 기록은 남음) |
+| amount | int | 크레딧, not null (도메인 > 0) |
+| message | varchar | nullable |
+| created_at / updated_at | timestamptz | `ix_wallet_donation_persona_created` (persona_id, created_at DESC) |
 
 > **결정**: donation을 wallet 컨텍스트에(크레딧 spend 기록). `community` 랭킹·`streaming` 표시가 읽음. 지급/사용의 정합은 `credit_transaction` 원장이 담당(잔액은 materialized).
+
+> **잔액과 원장을 한 트랜잭션에 갱신한다.** 트랜잭션 경계를 서비스가 쥘 수 없어서(서비스는 Session을 모른다) **원자적 단위 자체를 포트 연산으로** 표현했다 — `WalletRepository.apply(entry, donation=…)` 한 번의 호출이 원장 append + 잔액 갱신 + 후원 기록을 함께 한다.
+
+> **차감은 조건부 UPDATE 한 문장이다.** `UPDATE … SET credit_balance = credit_balance − x WHERE user_id = ? AND credit_balance >= x`. 잔액 확인과 차감이 갈라지면 동시 요청 두 개가 같은 잔액을 보고 둘 다 통과한다. 0행이 갱신되면 그것이 곧 '잔액 부족'이다. 실측: 잔액 300에 100원 후원 8개 동시 시도 → 정확히 3건 성공, 잔액 0. `type`은 `SELECT … FOR UPDATE` 대신 이 방식이라 잠금 대기가 없다.
+
+> **멱등 지급은 유일 제약이 강제한다.** 원장을 **먼저** insert하고 제약 위반이면 잔액을 건드리기 전에 빠져나온다. 앱 레벨의 "이미 있나?" 검사로는 동시 요청 두 개를 막을 수 없다(community의 좋아요와 같은 방식). 실측: 같은 멱등키 8회 동시 지급 → 원장 1줄, 잔액 1회분.
 
 ---
 
