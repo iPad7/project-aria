@@ -20,7 +20,6 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from aria.common.domain import Entity
-from aria.common.errors import ConflictError
 
 
 class TransactionType(Enum):
@@ -41,12 +40,6 @@ class TransactionType(Enum):
 # `payments.credit-refunded`).
 _CREDIT_TYPES = frozenset({TransactionType.PURCHASE, TransactionType.GRANT})
 _DEBIT_TYPES = frozenset({TransactionType.DONATION, TransactionType.REFUND})
-
-
-class InsufficientCreditError(ConflictError):
-    """잔액보다 많이 쓰려 함. 409 — 재시도하면 달라질 수 있는 상태 충돌이다."""
-
-    code = "insufficient_credit"
 
 
 class Wallet(BaseModel):

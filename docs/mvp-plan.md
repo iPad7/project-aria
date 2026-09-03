@@ -8,7 +8,7 @@
 
 - [x] 기반 슬라이스 (#8) — 공통 커널 · identity(회원가입·로그인·JWT) · persona(CRUD·소유권) · chat 조율 골조(Redis 분산락·우선순위 선점·펜싱)
 - [x] 실시간 종단 + 인프라 (#15) — docker-compose·Alembic 실체화 · WebSocket 전송(첫 프레임 인증) · Redis pub/sub 팬아웃(서버 2대 수평확장 실증)
-- [ ] 진행 중 (Phase 3, #21 — 순서 확정) — **A** 실제 생성 **완료** → **B** community 슬라이스(사연·좋아요·랭킹) · **C** superchat 우선 토픽 · 이후 **ML 플랫폼**(SFT·평가). 근거: 쓸 수 있는 걸 먼저 만들어 데이터·기준선을 확보한 뒤 자체 모델로 전환. WS 구독 공유 최적화는 부하가 실측되기 전이라 보류.
+- [ ] 진행 중 (Phase 3, #21 — 순서 확정) — **A** 실제 생성 **완료** → **B** community 슬라이스(사연·좋아요) **완료** → **C** superchat: C-1 wallet **완료** · C-2 후원 종단 **완료** · C-3 열혈순위 · C-4 durability(Kafka + generation-worker) → 이후 **ML 플랫폼**(SFT·평가). 근거: 쓸 수 있는 걸 먼저 만들어 데이터·기준선을 확보한 뒤 자체 모델로 전환. WS 구독 공유 최적화는 부하가 실측되기 전이라 보류.
   - **A-1** OpenAI 호환 어댑터로 `PersonaLLMPort` 실체화(#23) + 폴백 합성(#32) — 완료
   - **A-2** 자체 vLLM 서빙 — 완료. A.X-4.0-Light를 4비트 AWQ로 직접 양자화(4.6GB)해 RTX 5050에서 서빙하고, aria → LAN → 자체 vLLM 종단을 검증했습니다. 추론 서빙은 GPU 하드 경계라 별도 repo — [project-aria-inference](https://github.com/iPad7/project-aria-inference).
   - A-1의 남은 절반(페르소나별 시스템 프롬프트 해석)은 #22에서 계속 추적합니다. 운영 경로에서는 페르소나 구별이 포트 뒤 멀티-LoRA로 일어나므로, 이건 OpenAI 경로와 자체 모델 도입 전까지의 수단입니다.
@@ -45,7 +45,7 @@
 ### Phase 4 — 재현 마무리
 
 - [ ] 인증/관리자 — identity 인증은 기반 슬라이스(#8)에서 선구현. 관리자 권한(`is_staff` → JWT `staff` 클레임 → `require_staff`)은 C-1에서 선구현, 관리자 화면·잔여 인증 흐름 남음
-- [ ] 후원(토스) — wallet · payments 경계. **wallet 컨텍스트(잔액·원장·후원 기록)는 C-1에서 완료** — 결제 확정 이벤트가 붙을 지급 경로(`WalletService.grant(type=PURCHASE)`)까지 열어 둠. 남은 것은 payments 서비스와 outbox relay
+- [ ] 후원(토스) — wallet · payments 경계. **wallet 컨텍스트(잔액·원장·후원 기록)는 C-1, 후원 종단(FR-PAY-3·FR-GEN-6)은 C-2에서 완료** — 결제 확정 이벤트가 붙을 지급 경로(`WalletService.grant(type=PURCHASE)`)까지 열어 둠. 남은 것은 payments 서비스와 outbox relay
 
 ## 이후 (ML 플랫폼 / 확장)
 

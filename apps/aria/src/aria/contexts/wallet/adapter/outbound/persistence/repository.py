@@ -11,6 +11,7 @@ from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
+from aria.common.errors import InsufficientCreditError
 from aria.contexts.wallet.adapter.outbound.persistence.model import (
     CreditTransactionTable,
     DonationTable,
@@ -19,7 +20,6 @@ from aria.contexts.wallet.adapter.outbound.persistence.model import (
 from aria.contexts.wallet.domain.model import (
     CreditTransaction,
     Donation,
-    InsufficientCreditError,
     TransactionType,
 )
 

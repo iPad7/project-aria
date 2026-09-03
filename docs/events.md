@@ -27,6 +27,8 @@
 > 미디어 합성 완료 후 시청자 알림(타임라인 splice)은 **Redis pub/sub**(아래). Kafka 토픽 아님.
 > **superchat 우선 = 별도 토픽.** Kafka는 파티션 내 우선순위가 없어 필드로는 불가 → generation-worker가 `superchat` 토픽을 먼저 drain하고 없을 때만 normal을 처리(Kafka 우선순위 표준 패턴).
 
+> ⚠️ **위 표는 아직 코드가 아니다.** Kafka 어댑터도 generation-worker도 없고, 현재 생성은 WS 핸들러 안에서 **인라인**으로 돈다. 그 구조에서는 우선순위를 `RedisResponseCoordinator`가 담당한다(아래). 별도 토픽이 필요해지는 시점은 워커가 생길 때이고, 그것이 C-4의 범위다.
+
 ### payments ↔ wallet
 
 | 토픽 | producer | consumer group | key | 페이로드 |
@@ -40,8 +42,10 @@
 
 | 채널 | publisher | 용도 |
 |---|---|---|
-| `chat:room:{room_id}` | chat api/worker | 채팅·시스템 메시지 전 인스턴스 팬아웃 |
-| `stream:room:{room_id}` | media-worker | 미디어 세그먼트 알림(타임라인 splice), 후원 표시, 큐 상태 |
+| `chat:room:{room_id}` | chat api/worker | 채팅·응답·**후원(superchat)** 메시지 전 인스턴스 팬아웃 |
+| `stream:room:{room_id}` | media-worker | 미디어 세그먼트 알림(타임라인 splice), 후원 **영상 오버레이**, 큐 상태 |
+
+프레임 종류는 `type` 필드로 구분한다: `message` · `reply` · `superchat`. `reply`는 `source`(`chat`/`superchat`/`story`/`idle`)를 함께 실어, 클라이언트가 감사 응답과 일반 응답을 구분할 수 있게 한다.
 
 ---
 
@@ -73,10 +77,35 @@ idle이 사연을 읽는 흐름은 Kafka가 아니라 **동기 읽기 포트**�
 
 ---
 
+## 후원(superchat) — **동기 포트로 확정** (이벤트 아님)
+
+시청자가 크레딧으로 후원하면(FR-PAY-3) 차감·기록은 `wallet`이, 트리거와 감사 응답(FR-GEN-6)은 `chat`이 한다. 이 연결도 Kafka가 아니라 **동기 포트**다.
+
+- **`SuperchatPort`는 `common/superchat.py`에 둔다**: `charge(donor_id, persona_id, amount, *, room_id, message, idempotency_key) -> SuperchatReceipt`.
+- `wallet`이 어댑터로 구현(`WalletSuperchat`, `anyio.to_thread`로 sync 리포지토리 오프로드). **배선은 합성 루트 `aria/app.py`** — FastAPI `dependency_overrides`로 chat이 선언한 자리에 구현을 꽂는다.
+- 실패는 `InsufficientCreditError`(`common.errors`) — wallet이 던지고 chat이 잡는다.
+
+> **왜 이벤트가 아닌가.** 사연 낭독과 달리 후원은 **실패를 즉시 알아야 한다**. 차감이 실패했는데 감사 응답이 나가면 공짜 후원이 되고, 차감만 되고 아무 표시도 안 나가면 돈만 사라진다. 비동기로 흘려보내면 그 사이를 메울 방법이 없다.
+
+> **순서가 계약이다.** ① 차감 → 실패하면 여기서 끝, 방송에는 아무 것도 안 나간다. ② 후원 표시 발행 — **감사 응답 여부와 무관하게 항상**. ③ 응답 슬롯 확보 → 잡히면 감사 응답 생성·발행. 차감이 성공한 뒤에는 슬롯을 못 잡아도 후원 자체는 성립한다.
+
+> **예외가 컨텍스트가 아니라 커널에 있는 이유.** `InsufficientCreditError`는 wallet이 던지지만 chat이 잡고 payments도 환불 보상에서 마주친다. 컨텍스트끼리 서로 import하지 않으므로 공통 어휘는 `common.errors`에 산다.
+
+---
+
+## 선점은 두 가지를 함께 해야 성립한다
+
+`ResponseCoordinator`(Redis)의 우선순위 락은 **새 생성을 못 시작하게 막는 것**(`try_acquire`)과 **이미 돌던 생성의 결과를 버리는 것**(`still_holds`)이 둘 다 있어야 의미가 있다.
+
+앞의 것만 있으면 선점당한 쪽이 생성을 끝내고 답변을 그대로 발행해 버린다 — 슈퍼챗 감사 응답과 밀려난 채팅 응답이 둘 다 나가서 우선순위가 장식이 된다. 생성은 외부 호출이라 중간에 취소할 수 없으므로, 취소 대신 **결과를 내보내기 직전에 아직 내 슬롯인지 확인**한다.
+
+---
+
 ## 포트
 
-- `EventBusPort`(`aria.common.eventbus`) — Kafka publish(FastStream 어댑터). 도메인/애플리케이션은 Kafka를 모름. 소비는 워커 진입점이 생길 때 추가.
-- `StoryFeedPort`(`aria.common.story_feed`) — 위 사연 소비. community가 구현, chat이 소비, `aria/app.py`가 배선.
+- `EventBusPort`(`aria.common.eventbus`) — Kafka publish(FastStream 어댑터). 도메인/애플리케이션은 Kafka를 모름. **어댑터 미구현** — 워커 진입점과 함께(C-4).
+- `StoryFeedPort`(`aria.common.story_feed`) — 사연 소비. community가 구현, chat이 소비, `aria/app.py`가 배선.
+- `SuperchatPort`(`aria.common.superchat`) — 후원 결제. wallet이 구현, chat이 소비, `aria/app.py`가 배선.
 
 ## 미확정
 

@@ -3,6 +3,9 @@
 조율 서비스와 활동 트래커의 조립은 HTTP·WebSocket 어느 전송이든 동일하므로
 전송별 폴더가 아니라 inbound 최상위에 둔다(Redis 상태 어댑터 + LLM 어댑터 주입,
 LLM은 config로 스텁/실제 생성 중 선택).
+
+`get_superchat`만은 여기서 조립하지 않는다 — 구현은 wallet에 있고 chat은 wallet을
+import할 수 없다. 자리만 선언해 두고 실제 구현은 합성 루트(`aria/app.py`)가 꽂는다.
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ from redis.asyncio import Redis
 
 from aria.common.config import settings
 from aria.common.redis import get_redis
+from aria.common.superchat import SuperchatPort
 from aria.contexts.chat.adapter.outbound.inference.fallback import FallbackPersonaLLM
 from aria.contexts.chat.adapter.outbound.inference.openai_compat import OpenAICompatLLM
 from aria.contexts.chat.adapter.outbound.inference.stub import StubPersonaLLM
@@ -72,13 +76,28 @@ def get_activity_tracker(
     return RedisActivityTracker(redis)
 
 
+def get_superchat() -> SuperchatPort:
+    """후원 결제 포트의 **자리**. 구현은 합성 루트가 override로 꽂는다.
+
+    chat은 `common.superchat`의 계약만 알고 누가 구현했는지 모른다. FastAPI의
+    `dependency_overrides`가 "선언된 제공자를 구체 구현으로 치환"하는 표준 수단이고,
+    치환 지점이 곧 합성 루트다. 배선을 잊으면 여기서 시끄럽게 죽는다 — 후원 요청이
+    조용히 무시되는 것보다 낫다.
+    """
+    raise NotImplementedError(
+        "SuperchatPort가 배선되지 않았습니다 — aria/app.py의 합성 루트를 확인하세요."
+    )
+
+
 def get_chat_service(
     redis: Annotated[Redis, Depends(get_redis)],
+    superchat: Annotated[SuperchatPort, Depends(get_superchat)],
 ) -> ChatOrchestrationService:
     return ChatOrchestrationService(
         activity=RedisActivityTracker(redis),
         coordinator=RedisResponseCoordinator(redis),
         llm=_llm,
+        superchat=superchat,
     )
 
 

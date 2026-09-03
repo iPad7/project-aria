@@ -1,7 +1,8 @@
 """합성 루트 (composition root).
 
 여기가 common과 contexts를 함께 아는 유일한 자리다 — 그래서 common 안이 아니라
-패키지 최상위에 둔다(커널 순수성 계약 유지). 컨텍스트 라우터를 조립한다.
+패키지 최상위에 둔다(커널 순수성 계약 유지). 컨텍스트 라우터를 조립하고, 컨텍스트 간
+포트를 배선한다.
 """
 
 from __future__ import annotations
@@ -9,6 +10,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from aria.common.exception_handler import register_exception_handlers
+from aria.contexts.chat.adapter.inbound import deps as chat_deps
 from aria.contexts.chat.adapter.inbound.http.router import router as chat_router
 from aria.contexts.chat.adapter.inbound.ws.router import router as chat_ws_router
 from aria.contexts.community.adapter.inbound.http.router import (
@@ -19,6 +21,7 @@ from aria.contexts.community.adapter.inbound.http.router import (
 )
 from aria.contexts.identity.adapter.inbound.http.router import router as identity_router
 from aria.contexts.persona.adapter.inbound.http.router import router as persona_router
+from aria.contexts.wallet.adapter.inbound import deps as wallet_deps
 from aria.contexts.wallet.adapter.inbound.http.router import router as wallet_router
 
 
@@ -32,6 +35,11 @@ def create_app() -> FastAPI:
     app.include_router(community_router)
     app.include_router(community_like_router)
     app.include_router(wallet_router)
+
+    # 컨텍스트 간 포트 배선. chat은 `common.superchat`의 계약만 알고, wallet이 그것을
+    # 구현한다 — 둘을 아는 곳은 여기뿐이다. 이 배선이 없으면 후원 요청이 조용히
+    # 무시되는 대신 NotImplementedError로 죽는다.
+    app.dependency_overrides[chat_deps.get_superchat] = wallet_deps.get_superchat
 
     @app.get("/health")
     async def health() -> dict[str, str]:
