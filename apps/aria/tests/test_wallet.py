@@ -17,6 +17,7 @@ from starlette.testclient import TestClient
 from aria.app import create_app
 from aria.common.config import settings
 from aria.common.db import get_session
+from aria.common.errors import InsufficientCreditError
 from aria.contexts.identity.adapter.outbound.security.jwt_token_service import (
     JwtTokenService,
 )
@@ -25,11 +26,7 @@ from aria.contexts.wallet.adapter.outbound.persistence.repository import (
     SqlModelWalletRepository,
 )
 from aria.contexts.wallet.application.service import DonationService, WalletService
-from aria.contexts.wallet.domain.model import (
-    CreditTransaction,
-    InsufficientCreditError,
-    TransactionType,
-)
+from aria.contexts.wallet.domain.model import CreditTransaction, TransactionType
 
 
 @pytest.fixture

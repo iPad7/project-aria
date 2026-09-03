@@ -57,6 +57,35 @@ async def test_stale_release_does_not_free_preemptor(redis: FakeAsyncRedis) -> N
     assert await coord.try_acquire(room, ChatSource.CHAT) is None
 
 
+async def test_still_holds_is_true_while_unchallenged(redis: FakeAsyncRedis) -> None:
+    coord = RedisResponseCoordinator(redis)
+    room = uuid4()
+    slot = await coord.try_acquire(room, ChatSource.CHAT)
+    assert slot is not None
+    assert await coord.still_holds(room, slot) is True
+
+
+async def test_still_holds_is_false_after_preemption(redis: FakeAsyncRedis) -> None:
+    # 생성 결과를 내보내도 되는지 판단하는 근거. False면 만들어 둔 응답을 버린다.
+    coord = RedisResponseCoordinator(redis)
+    room = uuid4()
+    chat_slot = await coord.try_acquire(room, ChatSource.CHAT)
+    assert chat_slot is not None
+    await coord.try_acquire(room, ChatSource.SUPERCHAT)  # chat을 선점
+
+    assert await coord.still_holds(room, chat_slot) is False
+
+
+async def test_still_holds_is_false_after_release(redis: FakeAsyncRedis) -> None:
+    coord = RedisResponseCoordinator(redis)
+    room = uuid4()
+    slot = await coord.try_acquire(room, ChatSource.CHAT)
+    assert slot is not None
+    await coord.release(room, slot)
+
+    assert await coord.still_holds(room, slot) is False
+
+
 async def test_release_frees_lock(redis: FakeAsyncRedis) -> None:
     coord = RedisResponseCoordinator(redis)
     room = uuid4()

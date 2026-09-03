@@ -56,6 +56,15 @@ class RedisResponseCoordinator:
                 except WatchError:
                     continue  # 경합 발생 — 다시 읽고 판단
 
+    async def still_holds(self, room_id: UUID, slot: ResponseSlot) -> bool:
+        # 단순 읽기다 — WATCH가 필요 없다. 읽은 직후 선점당할 수는 있지만, 그건 어떤
+        # 검사 방식이든 마찬가지고(생성 결과 발행 자체가 원자적이지 않다), 창이
+        # 밀리초 단위로 좁아지는 것으로 충분하다.
+        current = await self._redis.get(_key(room_id))
+        if current is None:
+            return False
+        return current.split(":", 2)[1] == slot.token
+
     async def release(self, room_id: UUID, slot: ResponseSlot) -> None:
         key = _key(room_id)
         async with self._redis.pipeline() as pipe:

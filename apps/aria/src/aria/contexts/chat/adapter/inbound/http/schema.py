@@ -14,6 +14,14 @@ class PostMessageRequest(SchemaBase):
     text: str = Field(min_length=1, max_length=500)
 
 
+class PostSuperchatRequest(SchemaBase):
+    persona_id: UUID
+    amount: int = Field(gt=0)
+    message: str | None = Field(default=None, max_length=200)
+    # 재연결 후 재전송이 이중 과금되지 않도록. 선택이지만 클라이언트가 주는 편이 좋다.
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=64)
+
+
 class ReplyView(SchemaBase):
     text: str
     model_version: str | None
@@ -22,6 +30,14 @@ class ReplyView(SchemaBase):
 class MessageOutcomeResponse(SchemaBase):
     accepted: bool
     reply: ReplyView | None  # AI가 바쁘면 null (메시지는 accepted)
+
+
+class SuperchatOutcomeResponse(SchemaBase):
+    """후원 결과. `reply`가 null이어도 후원은 성립했다(차감·기록 완료)."""
+
+    donation_id: UUID
+    balance_after: int
+    reply: ReplyView | None
 
 
 class RoomStateResponse(SchemaBase):

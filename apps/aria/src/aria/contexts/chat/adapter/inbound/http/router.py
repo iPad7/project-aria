@@ -19,16 +19,24 @@ from aria.contexts.chat.adapter.inbound.deps import (
 from aria.contexts.chat.adapter.inbound.http.schema import (
     MessageOutcomeResponse,
     PostMessageRequest,
+    PostSuperchatRequest,
     ReplyView,
     RoomStateResponse,
+    SuperchatOutcomeResponse,
 )
 from aria.contexts.chat.application.port.out.activity import ActivityTracker
-from aria.contexts.chat.application.service import ChatOrchestrationService
+from aria.contexts.chat.application.service import ChatOrchestrationService, ChatReply
 
 # 레거시 ActivityManager의 기본 idle 임계값(초).
 _DEFAULT_IDLE_THRESHOLD = 6.0
 
 router = APIRouter(prefix="/rooms", tags=["chat"])
+
+
+def _to_reply_view(reply: ChatReply | None) -> ReplyView | None:
+    if reply is None:
+        return None
+    return ReplyView(text=reply.text, model_version=reply.model_version)
 
 
 @router.post("/{room_id}/messages", response_model=MessageOutcomeResponse)
@@ -44,12 +52,35 @@ async def post_message(
         author_id=principal.user_id,
         text=body.text,
     )
-    reply = (
-        ReplyView(text=outcome.reply.text, model_version=outcome.reply.model_version)
-        if outcome.reply is not None
-        else None
+    return MessageOutcomeResponse(
+        accepted=outcome.accepted, reply=_to_reply_view(outcome.reply)
     )
-    return MessageOutcomeResponse(accepted=outcome.accepted, reply=reply)
+
+
+@router.post("/{room_id}/superchats", response_model=SuperchatOutcomeResponse)
+async def post_superchat(
+    room_id: UUID,
+    body: PostSuperchatRequest,
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    service: Annotated[ChatOrchestrationService, Depends(get_chat_service)],
+) -> SuperchatOutcomeResponse:
+    """후원(FR-PAY-3)하고 감사 응답(FR-GEN-6)을 받는다.
+
+    잔액이 모자라면 `InsufficientCreditError` → 409. 그 경우 차감도 기록도 없다.
+    """
+    outcome = await service.handle_superchat(
+        room_id=room_id,
+        persona_id=body.persona_id,
+        donor_id=principal.user_id,
+        amount=body.amount,
+        message=body.message,
+        idempotency_key=body.idempotency_key,
+    )
+    return SuperchatOutcomeResponse(
+        donation_id=outcome.donation_id,
+        balance_after=outcome.balance_after,
+        reply=_to_reply_view(outcome.reply),
+    )
 
 
 @router.get("/{room_id}/state", response_model=RoomStateResponse)

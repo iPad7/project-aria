@@ -24,13 +24,14 @@ from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
 from aria.common.auth import Principal, principal_from_token
-from aria.common.errors import UnauthorizedError
+from aria.common.errors import InsufficientCreditError, UnauthorizedError
 from aria.contexts.chat.adapter.inbound.deps import (
     get_chat_service,
     get_room_broadcaster,
 )
 from aria.contexts.chat.application.port.out.broadcast import RoomBroadcaster
-from aria.contexts.chat.application.service import ChatOrchestrationService
+from aria.contexts.chat.application.service import ChatOrchestrationService, ChatReply
+from aria.contexts.chat.domain.source import ChatSource
 
 # 애플리케이션 정의 close 코드(4000~4999).
 _CLOSE_UNAUTHORIZED = 4401
@@ -39,6 +40,99 @@ _CLOSE_AUTH_TIMEOUT = 4408
 _AUTH_TIMEOUT = 5.0
 
 router = APIRouter(prefix="/rooms", tags=["chat"])
+
+
+async def _publish_reply(
+    broadcaster: RoomBroadcaster,
+    room_id: UUID,
+    persona_id: UUID,
+    reply: ChatReply,
+    source: ChatSource,
+) -> None:
+    # `source`가 있어야 클라이언트가 감사 응답과 일반 응답을 구분한다.
+    await broadcaster.publish(
+        room_id,
+        {
+            "type": "reply",
+            "room_id": str(room_id),
+            "persona_id": str(persona_id),
+            "source": source.value,
+            "text": reply.text,
+            "model_version": reply.model_version,
+        },
+    )
+
+
+async def _handle_message(
+    service: ChatOrchestrationService,
+    broadcaster: RoomBroadcaster,
+    room_id: UUID,
+    principal: Principal,
+    data: dict,
+) -> None:
+    persona_id = UUID(data["persona_id"])
+    text = data["text"]
+    outcome = await service.handle_user_message(
+        room_id=room_id,
+        persona_id=persona_id,
+        author_id=principal.user_id,
+        text=text,
+    )
+    await broadcaster.publish(
+        room_id,
+        {
+            "type": "message",
+            "room_id": str(room_id),
+            "author_id": str(principal.user_id),
+            "text": text,
+        },
+    )
+    if outcome.reply is not None:
+        await _publish_reply(
+            broadcaster, room_id, persona_id, outcome.reply, ChatSource.CHAT
+        )
+
+
+async def _handle_superchat(
+    service: ChatOrchestrationService,
+    broadcaster: RoomBroadcaster,
+    room_id: UUID,
+    principal: Principal,
+    data: dict,
+) -> None:
+    """후원 프레임 처리.
+
+    **후원 표시는 감사 응답과 무관하게 항상 발행한다.** 슬롯을 못 잡아 응답이 없어도
+    차감은 이미 일어났으므로, 돈을 받아 두고 방송에 아무 것도 안 나가는 일은 없어야 한다.
+    차감 자체가 실패했다면 예외로 나가고 여기까지 오지 않는다.
+    """
+    persona_id = UUID(data["persona_id"])
+    amount = int(data["amount"])
+    message = data.get("message")
+    outcome = await service.handle_superchat(
+        room_id=room_id,
+        persona_id=persona_id,
+        donor_id=principal.user_id,
+        amount=amount,
+        message=message,
+        idempotency_key=data.get("idempotency_key"),
+    )
+    await broadcaster.publish(
+        room_id,
+        {
+            "type": "superchat",
+            "room_id": str(room_id),
+            "persona_id": str(persona_id),
+            "donor_id": str(principal.user_id),
+            "donation_id": str(outcome.donation_id),
+            "amount": amount,
+            "message": message,
+        },
+    )
+    if outcome.reply is not None:
+        await _publish_reply(
+            broadcaster, room_id, persona_id, outcome.reply, ChatSource.SUPERCHAT
+        )
 
 
 async def _authenticate(websocket: WebSocket) -> Principal | None:
@@ -85,41 +179,26 @@ async def chat_ws(
         try:
             while True:
                 data = await websocket.receive_json()
+                # 프레임 종류. 없으면 기존 클라이언트가 보내던 일반 메시지로 본다.
+                kind = data.get("type", "message")
                 try:
-                    persona_id = UUID(data["persona_id"])
-                    text = data["text"]
-                    outcome = await service.handle_user_message(
-                        room_id=room_id,
-                        persona_id=persona_id,
-                        author_id=principal.user_id,
-                        text=text,
+                    if kind == "superchat":
+                        await _handle_superchat(
+                            service, broadcaster, room_id, principal, data
+                        )
+                    else:
+                        await _handle_message(
+                            service, broadcaster, room_id, principal, data
+                        )
+                except InsufficientCreditError as exc:
+                    # 후원 실패는 보낸 사람만 안다 — 방송에는 아무 것도 나가지 않는다.
+                    await websocket.send_json(
+                        {"error": {"code": exc.code, "message": exc.message}}
                     )
                 except (KeyError, ValueError, ValidationError) as exc:
                     # 잘못된 프레임은 끊지 않고 보낸 사람에게만 에러로 알린다(발행 안 함).
                     await websocket.send_json(
                         {"error": {"code": "invalid_message", "message": str(exc)}}
-                    )
-                    continue
-
-                await broadcaster.publish(
-                    room_id,
-                    {
-                        "type": "message",
-                        "room_id": str(room_id),
-                        "author_id": str(principal.user_id),
-                        "text": text,
-                    },
-                )
-                if outcome.reply is not None:
-                    await broadcaster.publish(
-                        room_id,
-                        {
-                            "type": "reply",
-                            "room_id": str(room_id),
-                            "persona_id": str(persona_id),
-                            "text": outcome.reply.text,
-                            "model_version": outcome.reply.model_version,
-                        },
                     )
         except WebSocketDisconnect:
             pass  # 클라이언트 종료 — outbound 펌프까지 취소하고 핸들러를 끝낸다
