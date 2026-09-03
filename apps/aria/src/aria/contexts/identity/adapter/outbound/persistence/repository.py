@@ -17,6 +17,7 @@ def _to_domain(row: UserTable) -> User:
         username=row.username,
         password_hash=row.password_hash,
         is_active=row.is_active,
+        is_staff=row.is_staff,
     )
 
 
@@ -32,6 +33,7 @@ class SqlModelUserRepository:
                 username=user.username,
                 password_hash=user.password_hash,
                 is_active=user.is_active,
+                is_staff=user.is_staff,
             )
         )
         self._session.commit()

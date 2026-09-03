@@ -52,7 +52,7 @@ class IdentityService:
             )
         if not user.is_active:
             raise UnauthorizedError("비활성화된 계정입니다", code="inactive_account")
-        return self._tokens.issue_access_token(user.id)
+        return self._tokens.issue_access_token(user.id, is_staff=user.is_staff)
 
     def get_user(self, user_id: UUID) -> User:
         user = self._users.get_by_id(user_id)

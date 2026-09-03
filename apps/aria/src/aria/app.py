@@ -19,6 +19,7 @@ from aria.contexts.community.adapter.inbound.http.router import (
 )
 from aria.contexts.identity.adapter.inbound.http.router import router as identity_router
 from aria.contexts.persona.adapter.inbound.http.router import router as persona_router
+from aria.contexts.wallet.adapter.inbound.http.router import router as wallet_router
 
 
 def create_app() -> FastAPI:
@@ -30,6 +31,7 @@ def create_app() -> FastAPI:
     app.include_router(chat_ws_router)
     app.include_router(community_router)
     app.include_router(community_like_router)
+    app.include_router(wallet_router)
 
     @app.get("/health")
     async def health() -> dict[str, str]:

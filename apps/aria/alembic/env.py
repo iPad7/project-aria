@@ -26,6 +26,9 @@ from aria.contexts.identity.adapter.outbound.persistence import (
 from aria.contexts.persona.adapter.outbound.persistence import (
     model as _persona,  # noqa: F401
 )
+from aria.contexts.wallet.adapter.outbound.persistence import (
+    model as _wallet,  # noqa: F401
+)
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)

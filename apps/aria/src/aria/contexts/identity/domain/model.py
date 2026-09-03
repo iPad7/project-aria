@@ -16,3 +16,5 @@ class User(Entity):
     username: str = Field(min_length=2, max_length=30)
     password_hash: str
     is_active: bool = True
+    # 운영자. 크레딧 지급 같은 관리 기능의 유일한 게이트다(docs/data-model.md).
+    is_staff: bool = False

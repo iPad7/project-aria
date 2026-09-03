@@ -14,3 +14,4 @@ class UserTable(UUIDMixin, TimestampMixin, table=True):
     username: str
     password_hash: str
     is_active: bool = True
+    is_staff: bool = False

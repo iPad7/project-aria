@@ -77,7 +77,8 @@ flowchart LR
 
 컨텍스트는 서로 import하지 않는다. 공유가 필요하면 성격에 따라 셋 중 하나로 올린다.
 
-- **횡단 관심사 → `common`.** 인증(authN)이 대표 예: `common/auth.py`가 Bearer 토큰을 검증해 `Principal(user_id)`만 돌려준다. 어느 컨텍스트든 identity를 몰라도 "누가 요청했나"를 얻는다. 토큰 **발급은 identity**(로그인), **검증은 common** — 같은 secret, 책임 분리.
+- **횡단 관심사 → `common`.** 인증(authN)이 대표 예: `common/auth.py`가 Bearer 토큰을 검증해 `Principal(user_id, is_staff)`를 돌려준다. 어느 컨텍스트든 identity를 몰라도 "누가 요청했나"를 얻는다. 토큰 **발급은 identity**(로그인), **검증은 common** — 같은 secret, 책임 분리.
+  > **관리자 여부는 토큰 클레임(`staff`)이다.** DB에서 매번 조회하려면 common이 identity를 import해야 하는데 커널 순수성 계약이 그것을 금지한다. 기존 분업(발급=identity, 검증=common) 위에 클레임 하나를 얹는 것이 유일하게 계약을 지키는 길이다. 대가는 **권한 회수가 토큰 만료 시점에 반영**된다는 것. 관리자 전용 엔드포인트는 `require_staff` 의존성을 쓴다(예: `POST /wallet/grants`).
 - **단순 참조 → 불투명 id.** 다른 컨텍스트의 엔티티는 UUID로만 참조한다(예: `persona.owner_id` = identity의 user id). 전체 객체를 끌어오지 않고, **DB에서도 cross-context FK를 걸지 않는다**(인덱스만) — 독립을 물리 스키마까지.
 - **진짜 협력 → 이벤트.** 상태 변화 통지는 Kafka(`EventBusPort`)로(예: payments→wallet).
 
