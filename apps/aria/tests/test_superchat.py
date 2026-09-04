@@ -256,16 +256,16 @@ def test_ws_plain_message_still_works_without_type(
     client: TestClient, donor_id: UUID
 ) -> None:
     # type이 없으면 기존 클라이언트처럼 일반 메시지로 취급한다(하위 호환).
+    # 다만 이제 일반 메시지는 후보로 쌓일 뿐이라 응답 프레임이 곧바로 오지 않는다
+    # — 후원과 갈라지는 지점이다(돈을 냈으면 반드시 답한다).
     room = live_room(client)
     with client.websocket_connect(f"/rooms/{room}/ws") as ws:
         ws.send_json({"token": _token(donor_id)})
         ws.send_json({"persona_id": str(uuid4()), "text": "안녕하세요"})
 
         message = ws.receive_json()
-        reply = ws.receive_json()
 
     assert message["type"] == "message"
-    assert reply["source"] == "chat"
 
 
 def test_ws_superchat_without_credit_keeps_connection(
@@ -299,6 +299,15 @@ class _FakeActivity:
 
     async def seconds_since_last(self, room_id: UUID) -> float | None:
         return None
+
+
+class _NullCandidates:
+    """후원 경로는 후보 버퍼를 쓰지 않는다 — 곧바로 생성을 요청한다."""
+
+    async def add(self, room_id: UUID, candidate: object) -> None: ...
+
+    async def take_all(self, room_id: UUID) -> list:
+        return []
 
 
 class _RecordingBroadcaster:
@@ -460,6 +469,7 @@ def _request_service(
         broadcaster=broadcaster,
         generation=GenerationRequestPublisher(events),
         superchat=superchat,
+        candidates=_NullCandidates(),
     )
 
 

@@ -57,12 +57,14 @@ router = APIRouter(prefix="/rooms", tags=["chat"])
 async def _handle_message(
     service: ChatOrchestrationService,
     room_id: UUID,
+    persona_id: UUID,
     principal: Principal,
     data: dict,
 ) -> None:
     await service.handle_user_message(
         room_id=room_id,
-        persona_id=UUID(data["persona_id"]),
+        # 프레임의 값이 아니라 **방의** 페르소나다. 시청자가 정할 일이 아니다.
+        persona_id=persona_id,
         author_id=principal.user_id,
         text=data["text"],
     )
@@ -71,12 +73,13 @@ async def _handle_message(
 async def _handle_superchat(
     service: ChatOrchestrationService,
     room_id: UUID,
+    persona_id: UUID,
     principal: Principal,
     data: dict,
 ) -> None:
     await service.handle_superchat(
         room_id=room_id,
-        persona_id=UUID(data["persona_id"]),
+        persona_id=persona_id,
         donor_id=principal.user_id,
         amount=int(data["amount"]),
         message=data.get("message"),
@@ -115,7 +118,7 @@ async def chat_ws(
     # 방을 **인증 뒤에** 확인한다 — 미인증 연결에 어떤 방이 존재하는지 알려 줄
     # 이유가 없다. 개설만 해 둔 방송의 존재가 밖으로 새지 않는다.
     try:
-        await rooms.ensure_open(room_id)
+        room = await rooms.ensure_open(room_id)
     except NotFoundError:
         await websocket.close(code=_CLOSE_ROOM_NOT_LIVE)
         return
@@ -141,9 +144,13 @@ async def chat_ws(
                 kind = data.get("type", "message")
                 try:
                     if kind == "superchat":
-                        await _handle_superchat(service, room_id, principal, data)
+                        await _handle_superchat(
+                            service, room_id, room.persona_id, principal, data
+                        )
                     else:
-                        await _handle_message(service, room_id, principal, data)
+                        await _handle_message(
+                            service, room_id, room.persona_id, principal, data
+                        )
                 except InsufficientCreditError as exc:
                     # 후원 실패는 보낸 사람만 안다 — 방송에는 아무 것도 나가지 않는다.
                     await websocket.send_json(

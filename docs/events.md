@@ -20,10 +20,18 @@
 
 | 토픽 | producer | consumer group | key | 페이로드 | 상태 |
 |---|---|---|---|---|---|
-| `aria.chat.response-requested` | chat api | `generation-workers` | room_id | msg_id, room_id, persona_id, source, prompt, requested_at | **구현됨** (C-4-1) |
+| `aria.chat.response-requested` | **progress-worker** | `generation-workers` | room_id | msg_id, room_id, persona_id, source, prompt, requested_at, selection | **구현됨** |
 | `aria.chat.superchat-requested` | chat api (후원 수신) | `generation-workers` | room_id | 위와 같은 모양 (`source="superchat"`) | **구현됨** (C-4-1) |
 | `aria.streaming.response-generated` | generation-worker | **broadcaster** (별도 repo) | room_id | msg_id, room_id, persona_id, text, emotion, model_version, generated_at | 미구현 |
 | `<topic>.dlq` | generation-worker | (사람) | 원본과 같음 | original_topic, failed_at, error, original | **구현됨** (C-4-2) |
+
+> **일반 채팅의 생성 요청은 api 가 아니라 진행 워커가 낸다**(FR-GEN-1·2). api 는 메시지를 **후보 버퍼**(Redis)에 쌓기만 하고, 워커가 틱마다 토픽으로 묶어 하나를 골라 발행한다. 후원은 예외로 api 가 곧바로 발행한다 — 돈을 냈으니 반드시 답해야 하고 우선순위도 가장 높다.
+>
+> 그전까지는 메시지마다 요청이 나가고 슬롯을 못 잡은 것은 조용히 버려졌다. 즉 **"선별"이 Redis 락 경쟁**이었다 — 동시에 들어온 것 중 먼저 잡은 것이 답했다. 초당 수십 개가 들어오는 방송에서는 아무 의미가 없다.
+>
+> `selection`(후보 수·토픽 수·점수·근거)은 **트레이스에 실리는 근거**다. "왜 저 댓글을 골랐나"에 답하기 위한 것이고, 없어도 생성은 그대로 돈다.
+
+> **소비하기 전에 두 문을 지난다.** 후보를 꺼내는 것도 사연 claim 도 되돌릴 수 없는 소비다. 꺼내 놓고 생성 워커가 슬롯을 못 잡으면 그 배치의 댓글이 답도 없이 사라지므로, 진행 워커는 ① 방별 락 ② **`ResponseCoordinator.is_busy`**(읽기 전용) 를 먼저 확인한다. 슬롯을 잡지는 않는다 — 잡는 것은 생성 워커의 일이다. 그래서 확인과 생성 사이에 선점당할 수는 있지만, 그건 더 높은 우선순위가 대신 답했다는 뜻이라 문제가 아니다. 없애려는 것은 **아무도 답하지 않았는데 후보만 사라지는** 경우다.
 
 > **두 요청 토픽의 페이로드는 같은 모양이다.** 원래 표는 `selected_comment`/`donor`처럼 서로 다른 필드를 적어 두었지만, 워커에게 필요한 것은 결국 "어느 방의 어느 페르소나가 무엇에 답하는가"뿐이라 하나의 `GenerationRequest`로 합쳤다. 후원 금액·메시지는 문구로 풀려 `prompt`에 들어간다. (`selected_comment`가 사라진 또 다른 이유: 선별(FR-GEN-1·2)이 아직 없어 실제로 실리는 것은 사용자가 보낸 원문이다.)
 

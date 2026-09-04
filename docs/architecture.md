@@ -70,7 +70,9 @@ flowchart LR
 
 > **generation-worker는 실체가 있다**(C-4-1). 진입점 `aria/workers/generation.py`, 실행은 `uv run faststream run aria.workers.generation:app`. api와 같은 이미지에 진입점만 다르며, 같은 consumer group 안에서 복제본을 늘리는 것이 곧 수평 확장이다. **합성 루트가 둘**인 셈인데(`app.py`와 여기), 둘 다 common과 컨텍스트를 함께 아는 자리라 common 밖 최상위에 둔다. idle-worker도 실체가 있다(아래). **media-worker는 없어졌다** — 그 일은 브로드캐스터로 나갔다.
 >
-> **idle 워커가 셋째 진입점이다**(`aria/workers/idle.py`, 실행 `uv run python -m aria.workers.idle`). 무채팅이 지속되면 사연을 읽거나 자율발화한다(FR-IDLE). FastStream은 메시지가 와야 깨어나므로 generation-worker에 합치지 않았다 — idle은 정반대로 "아무 일도 없을 때" 도는 타이머다.
+> **진행(progress) 워커가 셋째 진입점이다**(`aria/workers/idle.py`, 실행 `uv run python -m aria.workers.idle`). 페르소나가 **지금 무슨 말을 할지** 한 곳에서 정한다 — 선별된 댓글에 답하거나(FR-GEN-1·2), 사연을 읽거나, 자율발화한다(FR-IDLE).
+>
+> **셋을 한 서비스에 둔 이유: 경쟁 관계다.** 한 방에서 동시에 하나의 응답만 만들 수 있으므로 어차피 한 곳에서 골라야 한다. 나누면 둘이 각자 발행하고 코디네이터가 하나를 버리는 낭비가 생기는데, 그게 선별로 없애려던 바로 그 문제다. 우선순위는 **댓글 > 사연 > 자율발화**이고 `ChatSource` 값(CHAT=2 > STORY=IDLE=1)과 같은 순서다. FastStream은 메시지가 와야 깨어나므로 generation-worker에 합치지 않았다 — idle은 정반대로 "아무 일도 없을 때" 도는 타이머다.
 >
 > **이 워커는 DB를 안다**(방 목록·사연). "워커는 DB를 모른다"는 generation-worker의 규칙이고, idle 워커는 생성을 하지 않고 **요청만 발행**하므로 그 경계와 충돌하지 않는다.
 
@@ -109,6 +111,7 @@ flowchart LR
 
 - **개설은 staff 전용.** chat은 persona를 import할 수 없어 "이 페르소나가 당신 것인가"를 확인할 수 없다. 커널 포트를 하나 더 만드는 대신 PRD FR-AUTH-3("관리자는 방송·페르소나·TTS 설정을 관리한다")을 근거로 좁혔다 — 일반 사용자 호스트를 열게 되면 그때 `PersonaOwnershipPort`가 필요해지고, 그건 요구사항이 바뀌는 시점이다.
 - **채팅·후원·WS는 라이브 방에서만.** 방이 생기기 전에는 `room_id`가 아무 UUID나 됐고, 그래서 존재하지 않는 방에 크레딧을 태울 수 있었다(차감은 진짜로 일어났다).
+- **페르소나는 방이 정한다.** 클라이언트는 `persona_id`를 보내지 않는다. 방이 생기기 전의 잔재였고, 받아 두고 무시하면 잘못 보내도 아무 일이 안 일어나 디버깅이 어려워진다(거짓 계약). 후원에서 특히 중요하다 — 클라이언트 값을 믿으면 **엉뚱한 페르소나에게 후원이 기록되고**(`wallet_donation.persona_id`) 열혈순위가 그것을 집계한다.
 - 상태·유일성 규칙은 `docs/data-model.md`.
 
 > 이로써 **chat api가 처음으로 DB를 갖는다**(그전까지 Redis만 썼다). 다만 **generation-worker는 계속 DB를 모른다** — 방 검증은 api에서만 하고 워커는 슬롯·생성·발행만 한다. C-4에서 세운 경계가 유지된다.

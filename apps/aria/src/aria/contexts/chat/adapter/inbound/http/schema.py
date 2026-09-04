@@ -10,12 +10,23 @@ from aria.common.schema import SchemaBase
 
 
 class PostMessageRequest(SchemaBase):
-    persona_id: UUID  # 이 방에서 말하는 스트리머
+    """`persona_id` 를 받지 않는다 — **방이 페르소나를 소유한다**.
+
+    방(#53)이 생기기 전에는 클라이언트가 매 메시지에 실어 보냈다. 지금은 시청자가
+    정할 일이 아니고, 받아 두고 무시하면 잘못 보내도 아무 일이 안 일어나 디버깅이
+    어려워진다(거짓 계약).
+    """
+
     text: str = Field(min_length=1, max_length=500)
 
 
 class PostSuperchatRequest(SchemaBase):
-    persona_id: UUID
+    """후원도 마찬가지로 방의 페르소나에게 간다.
+
+    특히 여기서 중요하다 — 클라이언트가 보낸 값을 그대로 믿으면 **엉뚱한 페르소나에게
+    후원이 기록된다**(`wallet_donation.persona_id`). 돈이 걸린 경로라 방에서 가져온다.
+    """
+
     amount: int = Field(gt=0)
     message: str | None = Field(default=None, max_length=200)
     # 재연결 후 재전송이 이중 과금되지 않도록. 선택이지만 클라이언트가 주는 편이 좋다.

@@ -56,6 +56,10 @@ class RedisResponseCoordinator:
                 except WatchError:
                     continue  # 경합 발생 — 다시 읽고 판단
 
+    async def is_busy(self, room_id: UUID) -> bool:
+        # 단순 존재 확인. 잡지 않으므로 WATCH 도 토큰 비교도 필요 없다.
+        return await self._redis.exists(_key(room_id)) == 1
+
     async def still_holds(self, room_id: UUID, slot: ResponseSlot) -> bool:
         # 단순 읽기다 — WATCH가 필요 없다. 읽은 직후 선점당할 수는 있지만, 그건 어떤
         # 검사 방식이든 마찬가지고(생성 결과 발행 자체가 원자적이지 않다), 창이

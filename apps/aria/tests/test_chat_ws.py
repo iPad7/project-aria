@@ -39,22 +39,25 @@ def client() -> Iterator[TestClient]:
         yield test_client
 
 
-def test_ws_broadcasts_message_then_reply(client: TestClient) -> None:
+def test_ws_broadcasts_the_message_but_does_not_reply_yet(
+    client: TestClient,
+) -> None:
+    """메시지는 즉시 방에 뜨지만 **답은 바로 오지 않는다**(FR-GEN-1·2).
+
+    후보로 쌓이고 진행 워커가 틱마다 그중 하나를 골라 답한다. 전에는 메시지마다
+    생성 요청이 나가고 슬롯 경쟁에서 이긴 것만 답했다 — 그게 "선별"이었다.
+    """
     persona = uuid4()
     room = live_room(client, persona)
     with client.websocket_connect(f"/rooms/{room}/ws") as ws:
         ws.send_json({"token": _token()})
         ws.send_json({"persona_id": str(persona), "text": "안녕하세요"})
 
-        # 팬아웃으로 자기 메시지 이벤트 → 페르소나 응답 이벤트 순서로 되받는다.
+        # 팬아웃으로 자기 메시지를 되받는다. 응답 프레임은 오지 않는다.
         message = ws.receive_json()
-        reply = ws.receive_json()
 
     assert message["type"] == "message"
     assert message["text"] == "안녕하세요"
-    assert reply["type"] == "reply"
-    assert reply["model_version"] == "stub"
-    assert "안녕하세요" in reply["text"]
 
 
 def test_ws_rejects_bad_token(client: TestClient) -> None:
@@ -102,10 +105,7 @@ def test_ws_two_clients_same_room_see_each_other(client: TestClient) -> None:
         # viewer가 자기 메시지를 왕복시켜 구독이 성립했음을 확정한다(레이스 제거).
         viewer.send_json({"persona_id": str(uuid4()), "text": "viewer 등장"})
         assert viewer.receive_json()["text"] == "viewer 등장"  # message 이벤트
-        viewer.receive_json()  # reply 이벤트 배수
 
         # 이제 speaker가 보낸 것을 viewer가 받는다 — viewer는 그새 아무것도 안 보냄.
         speaker.send_json({"persona_id": str(uuid4()), "text": "다들 안녕"})
-        while (event := viewer.receive_json())["type"] != "message":
-            pass  # 혹시 낀 reply 프레임은 건너뛴다(발행 순서상 message가 먼저)
-        assert event["text"] == "다들 안녕"
+        assert viewer.receive_json()["text"] == "다들 안녕"

@@ -1,11 +1,12 @@
-"""idle 진행 — 자율발화·사연 낭독 (FR-IDLE-1·2·3).
+"""진행 — 댓글 선별·사연 낭독·자율발화 (FR-GEN-1·2, FR-IDLE-1·2·3).
 
-이 단위의 위험은 셋이다:
+이 단위의 위험은 넷이다:
 
 1. **사연이 헛되이 소비되는 것.** `claim_next_pending`은 조회가 아니라 상태 전이라,
    claim해 놓고 발행하지 못하면 시청자가 남긴 사연이 읽히지도 않고 사라진다.
 2. **중복 발화.** 워커가 여럿이면 같은 방에 두 번 말을 건다.
-3. **다시 집기.** 진행시킨 방을 다음 틱이 또 idle로 보면 계속 말한다.
+3. **다시 집기.** 진행시킨 방을 다음 틱이 또 집으면 계속 말한다.
+4. **우선순위 뒤집힘.** 시청자가 말을 걸고 있는데 혼잣말을 하는 것.
 """
 
 from uuid import UUID, uuid4
@@ -17,11 +18,19 @@ from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 
 from aria.common.story_feed import PendingStory
+from aria.contexts.chat.adapter.outbound.clustering.lexical import (
+    LexicalTopicClusterer,
+)
 from aria.contexts.chat.adapter.outbound.redis.activity import RedisActivityTracker
+from aria.contexts.chat.adapter.outbound.redis.coordinator import (
+    RedisResponseCoordinator,
+)
 from aria.contexts.chat.adapter.outbound.redis.idle_lock import RedisIdleLock
 from aria.contexts.chat.application.generation import GenerationRequestPublisher
-from aria.contexts.chat.application.idle import IdleProgressService
+from aria.contexts.chat.application.port.out.candidates import CandidateBuffer
+from aria.contexts.chat.application.progress import ProgressService
 from aria.contexts.chat.domain.source import ChatSource
+from aria.contexts.chat.domain.topic import Candidate
 from aria.contexts.community.adapter.outbound.persistence.repository import (
     SqlModelStoryRepository,
 )
@@ -61,14 +70,41 @@ def redis() -> FakeAsyncRedis:
     return FakeAsyncRedis(server=FakeServer(), decode_responses=True)
 
 
+class _MemoryCandidates:
+    """`CandidateBuffer` 스텁 — take_all 이 **소비**라는 성질을 흉내 낸다."""
+
+    def __init__(self, *candidates: Candidate) -> None:
+        self._by_room: dict[UUID, list[Candidate]] = {}
+        self._initial = list(candidates)
+
+    async def add(self, room_id: UUID, candidate: Candidate) -> None:
+        self._by_room.setdefault(room_id, []).append(candidate)
+
+    async def take_all(self, room_id: UUID) -> list[Candidate]:
+        taken = self._by_room.pop(room_id, None)
+        if taken is None and self._initial:
+            taken, self._initial = self._initial, []
+        return taken or []
+
+
+def _candidate(text: str) -> Candidate:
+    return Candidate(message_id=uuid4(), author_id=uuid4(), text=text)
+
+
 def _service(
-    redis: FakeAsyncRedis, stories: _FakeStories, bus: object | None = None
-) -> IdleProgressService:
-    return IdleProgressService(
+    redis: FakeAsyncRedis,
+    stories: _FakeStories,
+    bus: object | None = None,
+    candidates: CandidateBuffer | None = None,
+) -> ProgressService:
+    return ProgressService(
         activity=RedisActivityTracker(redis),
         lock=RedisIdleLock(redis),
         stories=stories,
         generation=GenerationRequestPublisher(bus or RecordingEventBus()),
+        candidates=candidates or _MemoryCandidates(),
+        clusterer=LexicalTopicClusterer(),
+        coordinator=RedisResponseCoordinator(redis),
         threshold_seconds=_THRESHOLD,
     )
 
@@ -91,7 +127,7 @@ async def test_active_room_is_left_alone(redis: FakeAsyncRedis) -> None:
     await RedisActivityTracker(redis).touch(room)  # 방금 누가 말했다
     stories = _FakeStories(_story())
 
-    assert await _service(redis, stories).advance(room, uuid4()) is False
+    assert await _service(redis, stories).advance(room, uuid4()) is None
     # 사연을 건드리지도 않았다 — idle이 아니면 claim까지 가지 않는다.
     assert stories.claims == 0
 
@@ -101,7 +137,7 @@ async def test_idle_room_with_a_story_reads_it(redis: FakeAsyncRedis) -> None:
     story = _story(nickname="복숭아")
     service = _service(redis, _FakeStories(story), events)
 
-    assert await service.advance(uuid4(), uuid4()) is True
+    assert await service.advance(uuid4(), uuid4()) is not None
 
     [event] = events.published
     assert event.payload["source"] == ChatSource.STORY.value
@@ -152,7 +188,7 @@ async def test_locked_room_does_not_touch_stories(redis: FakeAsyncRedis) -> None
     stories = _FakeStories(_story())
     await RedisIdleLock(redis).acquire(room)  # 다른 워커가 이미 맡았다
 
-    assert await _service(redis, stories).advance(room, uuid4()) is False
+    assert await _service(redis, stories).advance(room, uuid4()) is None
     assert stories.claims == 0  # 사연을 건드리지 않았다
 
 
@@ -202,8 +238,8 @@ async def test_advancing_marks_the_room_active(redis: FakeAsyncRedis) -> None:
     stories = _FakeStories(_story(), _story())
     service = _service(redis, stories)
 
-    assert await service.advance(room, uuid4()) is True
-    assert await service.advance(room, uuid4()) is False
+    assert await service.advance(room, uuid4()) is not None
+    assert await service.advance(room, uuid4()) is None
     assert stories.claims == 1
 
 
@@ -331,8 +367,8 @@ async def test_one_failing_room_does_not_stop_the_others(
     doomed, healthy = uuid4(), uuid4()
     events = RecordingEventBus()
 
-    class _FlakyService(IdleProgressService):
-        async def advance(self, room_id: UUID, persona_id: UUID) -> bool:
+    class _FlakyService(ProgressService):
+        async def advance(self, room_id: UUID, persona_id: UUID):
             if room_id == doomed:
                 raise RuntimeError("이 방만 터진다")
             return await super().advance(room_id, persona_id)
@@ -342,6 +378,9 @@ async def test_one_failing_room_does_not_stop_the_others(
         lock=RedisIdleLock(redis),
         stories=_FakeStories(),
         generation=GenerationRequestPublisher(events),
+        candidates=_MemoryCandidates(),
+        clusterer=LexicalTopicClusterer(),
+        coordinator=RedisResponseCoordinator(redis),
         threshold_seconds=_THRESHOLD,
     )
 
@@ -362,3 +401,145 @@ async def test_tick_asks_for_at_most_the_configured_number_of_rooms(
     await tick(rooms, _service(redis, _FakeStories()))
 
     assert rooms.asked_limit == settings.idle_rooms_per_tick
+
+
+# --- 우선순위: 댓글 > 사연 > 자율발화 ----------------------------------------
+#
+# 셋은 경쟁 관계다 — 한 방에서 하나만 말할 수 있으므로 한 곳에서 골라야 한다.
+# 나누면 둘이 각자 발행하고 코디네이터가 하나를 버리는 낭비가 생긴다.
+
+
+async def test_chat_wins_over_a_waiting_story(redis: FakeAsyncRedis) -> None:
+    """시청자가 지금 말을 걸고 있는데 사연을 읽으면 이상하다."""
+    events = RecordingEventBus()
+    stories = _FakeStories(_story())
+    service = _service(
+        redis,
+        stories,
+        events,
+        candidates=_MemoryCandidates(_candidate("고백하는 게 맞을까요?")),
+    )
+
+    progress = await service.advance(uuid4(), uuid4())
+
+    assert progress is not None
+    assert progress.source is ChatSource.CHAT
+    assert events.published[0].payload["source"] == "chat"
+    # 사연은 건드리지 않았다 — claim 은 소비라 되돌릴 수 없다.
+    assert stories.claims == 0
+
+
+async def test_story_is_read_when_chat_is_quiet(redis: FakeAsyncRedis) -> None:
+    events = RecordingEventBus()
+
+    progress = await _service(redis, _FakeStories(_story()), events).advance(
+        uuid4(), uuid4()
+    )
+
+    assert progress is not None and progress.source is ChatSource.STORY
+
+
+async def test_self_talk_when_nothing_else_is_pending(
+    redis: FakeAsyncRedis,
+) -> None:
+    progress = await _service(redis, _FakeStories()).advance(uuid4(), uuid4())
+
+    assert progress is not None and progress.source is ChatSource.IDLE
+
+
+async def test_chat_is_answered_even_when_the_room_is_not_idle(
+    redis: FakeAsyncRedis,
+) -> None:
+    """활동 중인 방도 답해야 한다 — idle 판정은 사연·자율발화에만 건다.
+
+    이게 없으면 채팅이 활발한 방이 영영 답을 못 받는다(항상 not idle 이므로).
+    """
+    room = uuid4()
+    await RedisActivityTracker(redis).touch(room)  # 방금 누가 말했다
+    service = _service(
+        redis,
+        _FakeStories(_story()),
+        candidates=_MemoryCandidates(_candidate("고백하는 게 맞을까요?")),
+    )
+
+    progress = await service.advance(room, uuid4())
+
+    assert progress is not None and progress.source is ChatSource.CHAT
+
+
+async def test_selection_details_are_reported(redis: FakeAsyncRedis) -> None:
+    # 트레이스에 실을 근거다 — "후보 몇 개 중 왜 저걸 골랐나".
+    service = _service(
+        redis,
+        _FakeStories(),
+        candidates=_MemoryCandidates(
+            _candidate("고백하는 게 맞을까요?"),
+            _candidate("ㅋㅋ"),
+        ),
+    )
+
+    progress = await service.advance(uuid4(), uuid4())
+
+    assert progress is not None
+    assert progress.candidate_count == 2
+    assert progress.topic_count >= 1
+    assert progress.selection is not None
+    assert "question" in progress.selection.reasons
+
+
+async def test_locked_room_does_not_consume_candidates(
+    redis: FakeAsyncRedis,
+) -> None:
+    # 후보를 꺼내는 것도 소비다 — 락이 그 앞에 있어야 한다.
+    room = uuid4()
+    candidates = _MemoryCandidates(_candidate("고백할까요?"))
+    await RedisIdleLock(redis).acquire(room)
+
+    assert (
+        await _service(redis, _FakeStories(), candidates=candidates).advance(
+            room, uuid4()
+        )
+        is None
+    )
+    # 소비되지 않았으므로 후보가 그대로 남아 있다 — 락을 놓으면 다음 틱이 답한다.
+    assert len(await candidates.take_all(room)) == 1
+
+
+# --- 헛된 소비를 막는가 (사후 발견 · 이번 단위가 남겼던 결함) -----------------
+
+
+async def test_busy_room_does_not_consume_candidates(redis: FakeAsyncRedis) -> None:
+    """생성 워커가 슬롯을 못 잡으면 그 배치의 댓글이 답도 없이 사라졌다.
+
+    사연에는 같은 문제를 알고 `release` 를 뒀는데 후보에는 두지 않았다. 후보를 꺼내는
+    것도 되돌릴 수 없는 소비이므로, **꺼내기 전에** 지금 누가 응답 중인지 묻는다.
+    """
+    room = uuid4()
+    coordinator = RedisResponseCoordinator(redis)
+    await coordinator.try_acquire(room, ChatSource.SUPERCHAT)  # 후원이 응답 중
+    candidates = _MemoryCandidates(_candidate("고백하는 게 맞을까요?"))
+
+    progress = await _service(redis, _FakeStories(), candidates=candidates).advance(
+        room, uuid4()
+    )
+
+    assert progress is None
+    # 후보가 그대로 남아 있다 — 슬롯이 비면 다음 틱이 답한다.
+    assert len(await candidates.take_all(room)) == 1
+
+
+async def test_busy_room_does_not_consume_a_story(redis: FakeAsyncRedis) -> None:
+    # 같은 이유로 사연도 claim 하지 않는다.
+    room = uuid4()
+    await RedisResponseCoordinator(redis).try_acquire(room, ChatSource.SUPERCHAT)
+    stories = _FakeStories(_story())
+
+    assert await _service(redis, stories).advance(room, uuid4()) is None
+    assert stories.claims == 0
+
+
+async def test_free_room_proceeds(redis: FakeAsyncRedis) -> None:
+    # 대조군 — 아무도 응답 중이 아니면 그대로 진행한다.
+    progress = await _service(redis, _FakeStories(_story())).advance(uuid4(), uuid4())
+
+    assert progress is not None
