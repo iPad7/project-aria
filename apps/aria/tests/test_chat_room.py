@@ -268,3 +268,57 @@ def test_ws_accepts_a_live_room(client: TestClient) -> None:
         ws.send_json({"persona_id": str(uuid4()), "text": "안녕하세요"})
 
         assert ws.receive_json()["type"] == "message"
+
+
+# --- 페르소나는 방이 정한다 (사후 발견) --------------------------------------
+
+
+def test_message_uses_the_rooms_persona_not_the_clients(
+    client: TestClient,
+) -> None:
+    """방(#53)이 생기기 전에는 클라이언트가 매 메시지에 `persona_id` 를 실어 보냈다.
+
+    지금은 방이 페르소나를 소유한다. 받아 두고 무시하면 잘못 보내도 아무 일이 안
+    일어나 디버깅이 어려워지므로(거짓 계약), 아예 받지 않는다.
+    """
+    room_id = _open(client, uuid4())
+    client.post(f"/rooms/{room_id}/live", headers=staff_headers())
+
+    res = client.post(
+        f"/rooms/{room_id}/messages",
+        headers=_viewer_headers(),
+        # persona_id 를 보내지 않아도 된다 — 방에서 가져온다.
+        json={"text": "안녕하세요"},
+    )
+
+    assert res.status_code == 202
+
+
+def test_superchat_is_recorded_against_the_rooms_persona(
+    client: TestClient,
+) -> None:
+    """돈이 걸린 경로라 특히 중요하다.
+
+    클라이언트가 보낸 값을 그대로 믿으면 **엉뚱한 페르소나에게 후원이 기록된다**
+    (`wallet_donation.persona_id`) — 열혈순위가 그 값을 집계한다.
+    """
+    persona = uuid4()
+    room_id = _open(client, persona)
+    client.post(f"/rooms/{room_id}/live", headers=staff_headers())
+    donor = uuid4()
+    client.post(
+        "/wallet/grants",
+        headers=staff_headers(),
+        json={"user_id": str(donor), "credits": 1000, "idempotency_key": "seed"},
+    )
+
+    res = client.post(
+        f"/rooms/{room_id}/superchats",
+        headers=_viewer_headers(donor),
+        json={"amount": 300},
+    )
+    assert res.status_code == 200, res.text
+
+    # 후원이 **방의** 페르소나 순위에 잡힌다.
+    board = client.get(f"/personas/{persona}/ranking").json()
+    assert [r["donor_id"] for r in board] == [str(donor)]

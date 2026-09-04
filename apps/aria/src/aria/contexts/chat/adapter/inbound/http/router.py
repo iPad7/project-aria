@@ -134,10 +134,10 @@ async def post_message(
     생성은 워커가 하고 결과는 방 채널(Redis pub/sub)로 흘러 그 방을 구독한 모든
     연결에 간다. 응답을 보려면 WS로 붙어 있어야 한다.
     """
-    await rooms.ensure_open(room_id)
+    room = await rooms.ensure_open(room_id)
     outcome = await service.handle_user_message(
         room_id=room_id,
-        persona_id=body.persona_id,
+        persona_id=room.persona_id,
         author_id=principal.user_id,
         text=body.text,
     )
@@ -159,10 +159,12 @@ async def post_superchat(
     만들어 방 채널로 발행한다. 슬롯을 못 잡아 응답이 안 생겨도 후원은 성립한 것이다.
     """
     # 차감이 진짜로 일어나므로, 없는 방을 향한 후원은 **차감 전에** 막아야 한다.
-    await rooms.ensure_open(room_id)
+    room = await rooms.ensure_open(room_id)
     outcome = await service.handle_superchat(
         room_id=room_id,
-        persona_id=body.persona_id,
+        # 클라이언트가 보낸 값이 아니라 **방의** 페르소나다 — 그러지 않으면 엉뚱한
+        # 페르소나에게 후원이 기록된다.
+        persona_id=room.persona_id,
         donor_id=principal.user_id,
         amount=body.amount,
         message=body.message,
