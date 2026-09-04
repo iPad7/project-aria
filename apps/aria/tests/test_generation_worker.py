@@ -16,6 +16,7 @@ from faststream import AckPolicy
 from faststream.kafka import KafkaBroker, TestKafkaBroker
 from generation_harness import RecordingEventBus
 
+from aria.common.eventbus import Event
 from aria.common.kafka import KafkaEventBus
 from aria.contexts.chat.adapter.inbound.worker import router as worker_router
 from aria.contexts.chat.adapter.inbound.worker.router import GenerationConsumer
@@ -361,3 +362,62 @@ async def test_redis_claims_do_not_collide_across_messages() -> None:
 
     assert await registry.claim(uuid4()) is True
     assert await registry.claim(uuid4()) is True
+
+
+# --- 발행 전 연결 (실제로 띄워 보고 찾은 버그) ------------------------------
+
+
+class _FakeBroker:
+    """`running`과 `connect()`만 흉내 내는 브로커."""
+
+    def __init__(self, *, running: bool = False) -> None:
+        self.running = running
+        self.connects = 0
+        self.published: list[dict] = []
+
+    async def connect(self) -> None:
+        self.connects += 1
+        self.running = True
+
+    async def publish(self, payload, *, topic, key) -> None:
+        self.published.append({"payload": payload, "topic": topic, "key": key})
+
+
+async def test_publish_connects_the_broker_first() -> None:
+    """워커(FastStream)는 프레임워크가 생명주기를 잡아 주지만 api(FastAPI)는 아니다.
+
+    연결 없이 발행하면 `IncorrectState`로 죽는다 — 실제로 그렇게 죽었고, 이 포트를
+    가짜로 갈아끼우는 테스트들은 그 경로를 타지 않아 잡히지 않았다.
+    """
+    broker = _FakeBroker()
+
+    await KafkaEventBus(broker).publish(Event(stream="t", key="k", payload={"a": 1}))
+
+    assert broker.connects == 1
+    assert broker.published[0]["topic"] == "t"
+
+
+async def test_already_connected_broker_is_not_reconnected() -> None:
+    broker = _FakeBroker(running=True)
+
+    await KafkaEventBus(broker).publish(Event(stream="t", key="k", payload={}))
+
+    assert broker.connects == 0
+
+
+async def test_concurrent_publishes_connect_once() -> None:
+    # 요청마다 새 KafkaEventBus가 만들어지므로(get_event_bus), 동시 발행이 연결을
+    # 여러 번 시도하지 않아야 한다.
+    import asyncio
+
+    broker = _FakeBroker()
+
+    await asyncio.gather(
+        *[
+            KafkaEventBus(broker).publish(Event(stream="t", key="k", payload={}))
+            for _ in range(5)
+        ]
+    )
+
+    assert broker.connects == 1
+    assert len(broker.published) == 5

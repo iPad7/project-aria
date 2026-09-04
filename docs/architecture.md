@@ -66,6 +66,8 @@ flowchart LR
 | **aria 모놀리스** | contexts: identity·persona·community·chat·streaming·wallet | api / generation-worker / idle-worker (같은 이미지) | 워커로 독립 스케일. wallet은 후원 핫패스라 여기 |
 | **broadcaster** | 아바타 렌더 · TTS · 인코딩 | 별도 프로세스/머신 | **별도 repo.** 스트리머 PC 역할이라 aria 밖이다(inference와 같은 이유) |
 
+> **api는 Kafka 연결을 지연으로 맺는다.** 워커(FastStream)는 프레임워크가 생명주기를 잡아 주지만 api(FastAPI)는 아니라, 연결 없이 발행하면 `IncorrectState`로 죽는다 — 실제로 띄워 보고 찾았다(포트를 가짜로 갈아끼우는 테스트들은 그 경로를 타지 않는다). startup에서 연결하지 않는 이유: Kafka가 늦게 떠도 api는 떠야 하고(채팅 말고도 하는 일이 많다), 반대로 startup에서 기다리면 브로커 없는 환경에서 기동이 막힌다.
+
 > **generation-worker는 실체가 있다**(C-4-1). 진입점 `aria/workers/generation.py`, 실행은 `uv run faststream run aria.workers.generation:app`. api와 같은 이미지에 진입점만 다르며, 같은 consumer group 안에서 복제본을 늘리는 것이 곧 수평 확장이다. **합성 루트가 둘**인 셈인데(`app.py`와 여기), 둘 다 common과 컨텍스트를 함께 아는 자리라 common 밖 최상위에 둔다. idle-worker도 실체가 있다(아래). **media-worker는 없어졌다** — 그 일은 브로드캐스터로 나갔다.
 >
 > **idle 워커가 셋째 진입점이다**(`aria/workers/idle.py`, 실행 `uv run python -m aria.workers.idle`). 무채팅이 지속되면 사연을 읽거나 자율발화한다(FR-IDLE). FastStream은 메시지가 와야 깨어나므로 generation-worker에 합치지 않았다 — idle은 정반대로 "아무 일도 없을 때" 도는 타이머다.
