@@ -39,3 +39,26 @@ class PublicPersonaResponse(SchemaBase):
     tagline: str
     description: str
     is_active: bool
+
+
+class CommunicationStyleRequest(SchemaBase):
+    tone: str = Field(min_length=1, max_length=100)
+    sentence_length: str = Field(default="", max_length=100)
+    question_style: str = Field(default="", max_length=200)
+    # 1: 매우 완곡 ~ 5: 매우 직설적
+    directness: int = Field(default=3, ge=1, le=5)
+    empathy_expression: str = Field(default="", max_length=200)
+
+
+class CoreValuesRequest(SchemaBase):
+    """가치관 목록. **순서가 곧 우선순위**라 집합이 아니라 배열이다."""
+
+    values: list[str] = Field(min_length=0, max_length=10)
+
+
+class PersonaProfileResponse(SchemaBase):
+    """말투·가치관. 말투를 아직 설정하지 않은 페르소나는 `style`이 null이다."""
+
+    persona_id: UUID
+    style: CommunicationStyleRequest | None
+    core_values: list[str]

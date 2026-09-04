@@ -12,8 +12,10 @@ generation-worker / media-worker (같은 이미지)" 그대로다.
 from __future__ import annotations
 
 from faststream import FastStream
+from sqlmodel import Session
 
 from aria.common.config import settings
+from aria.common.db import engine
 from aria.common.kafka import KafkaEventBus, get_broker
 from aria.common.redis import get_redis
 from aria.common.topics import ensure_topics
@@ -33,18 +35,34 @@ from aria.contexts.chat.application.generation import (
     SUPERCHAT_REQUESTED,
     ResponseGenerationService,
 )
+from aria.contexts.persona.adapter.outbound.cache.profile import CachedPersonaProfiles
+from aria.contexts.persona.adapter.outbound.persistence.repository import (
+    SqlModelPersonaRepository,
+    SqlModelProfileRepository,
+)
+from aria.contexts.persona.adapter.outbound.profile import PersonaProfileProvider
 
 
 def create_app() -> FastStream:
     broker = get_broker()
     redis = get_redis()
 
-    # 워커는 DB를 모른다 — 슬롯(Redis)·생성(포트 뒤)·발행(Redis pub/sub)이 전부다.
-    # 응답이 pub/sub으로 나가므로 api 프로세스의 WS 연결들이 그대로 받는다.
+    # 페르소나 인격을 읽으려고 **DB를 알게 됐다**. C-4에서 "워커는 DB를 모른다"고 한 것은
+    # 그때 읽을 것이 없었기 때문이고, 지금은 생성에 인격이 필요하다. 읽기 전용이며
+    # 캐시가 앞에 있어 대부분의 생성은 DB까지 가지 않는다.
+    session = Session(engine)
+    profiles = CachedPersonaProfiles(
+        PersonaProfileProvider(
+            SqlModelPersonaRepository(session), SqlModelProfileRepository(session)
+        ),
+        redis,
+    )
+
     service = ResponseGenerationService(
         coordinator=RedisResponseCoordinator(redis),
         llm=build_llm(),
         broadcaster=RedisRoomBroadcaster(redis),
+        profiles=profiles,
     )
     # 배달 보증(멱등·DLQ)은 어댑터가 입힌다 — 위 서비스는 그런 게 있는 줄 모른다.
     consumer = GenerationConsumer(

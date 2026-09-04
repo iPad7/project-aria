@@ -6,9 +6,10 @@ app은 뒤가 GPT든 SFT한 sLLM이든 구분하지 못한다(포트의 요점).
 
 클라이언트를 생성자로 주입받아 네트워크 없이 단위 테스트할 수 있다.
 
-페르소나별 시스템 프롬프트 해석은 아직 없다 — 페르소나 데이터(설명·성격)는 persona
-컨텍스트 소유라 chat이 직접 import할 수 없다. 지금은 공통 상담 프롬프트를 주입하고,
-페르소나별 해석은 별도 포트/이벤트로 뒤에 붙인다.
+**시스템 프롬프트를 여기서 만들지 않는다.** 페르소나 해석은 application이 하고
+(`chat/application/persona_prompt.py`), 결과를 `messages`의 첫 원소로 넘겨준다.
+어댑터가 또 주입하면 시스템 메시지가 둘이 되고, 무엇보다 어댑터가 페르소나를
+조회하게 되면 "앱은 persona_id만 넘기고 모델 세부를 모른다"는 경계가 무너진다.
 """
 
 from __future__ import annotations
@@ -23,34 +24,22 @@ from aria.contexts.chat.application.port.out.llm import (
     Message,
 )
 
-_DEFAULT_SYSTEM = (
-    "너는 연애 상담을 해 주는 AI 페르소나다. 시청자의 사연에 공감하며 "
-    "따뜻하고 구체적으로, 한국어로 답한다."
-)
-
 
 class OpenAICompatLLM:
-    def __init__(
-        self,
-        client: AsyncOpenAI,
-        model: str,
-        system_prompt: str = _DEFAULT_SYSTEM,
-    ) -> None:
+    def __init__(self, client: AsyncOpenAI, model: str) -> None:
         self._client = client
         self._model = model
-        self._system_prompt = system_prompt
 
     async def generate(
         self,
-        persona_id: str,  # A-1에선 미사용 — 페르소나별 프롬프트 해석은 후속
+        # 어댑터는 이 id를 쓰지 않는다. 인격은 이미 messages의 시스템 메시지에 들어
+        # 있고, 운영 경로에서 이 id가 쓰이는 곳은 포트 **뒤**(멀티-LoRA 선택)다.
+        persona_id: str,
         messages: Sequence[Message],
         params: GenParams | None = None,
     ) -> LLMResult:
         params = params or GenParams()
-        chat_messages: list[dict[str, str]] = [
-            {"role": "system", "content": self._system_prompt}
-        ]
-        chat_messages.extend({"role": m.role, "content": m.content} for m in messages)
+        chat_messages = [{"role": m.role, "content": m.content} for m in messages]
 
         completion = await self._client.chat.completions.create(
             model=self._model,
