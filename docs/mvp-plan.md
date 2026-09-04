@@ -15,7 +15,7 @@
   - **기준선은 A-1의 OpenAI로 유지합니다.** 8GB VRAM 때문에 택한 4비트 양자화가 나중에 SFT 모델을 평가하는 잣대가 되어선 안 되기 때문입니다. A-2는 "자체 GPU에서 자체 모델이 돈다"는 실증입니다.
 
 - [ ] **다음 — LLM 코어** (순서 확정). 근거: *"쓸 수 있는 걸 먼저 만들어 데이터·기준선을 확보한 뒤 자체 모델로 전환"* 이라는 이 문서의 원칙에서 **이제 앞의 절반이 끝났습니다.** 배관은 깔렸는데 정작 흐르는 것이 페르소나답지 않은 상태라, 다음은 그 안쪽입니다.
-  1. **페르소나 해석**(#22) + persona 레거시 스키마 — `Persona`는 지금 `name/tagline/description`뿐이고 `core_value`·`communication_style`·`moral_compass`·`personality_trait`가 하나도 없습니다. `persona_id`를 포트에 넘기지만 **해석하는 코드가 없어**, PRD가 말하는 "페르소나별 성격·말투로 반응한다"가 아직 구현되지 않았습니다
+  1. ~~**페르소나 해석**~~ — **완료**(#59). `communication_style` + `core_value`(우선순위 M:N)를 만들고, `PersonaProfilePort`로 chat에 건너가 시스템 프롬프트가 됩니다. `moral_compass`·`personality_trait`는 3번(관측성)이 붙어 효과를 측정할 수 있을 때 넣습니다
   2. **댓글 선별**(FR-GEN-1·2) — 토픽 군집화 · 베스트 댓글 선별. "AI가 무엇에 반응할지 고른다"는 스트리머다움의 핵심이고, 임베딩·군집화·랭킹이라 진짜 ML 작업입니다
   3. **관측성/평가** — OTel·SigNoz·Langfuse가 확정 스택인데 **의존성조차 없습니다**. 4번의 전제입니다 — 기준선이 없으면 SFT 결과를 평가할 수 없습니다
   4. **ML 플랫폼** — SFT · DPO · 평가 · 레지스트리
@@ -32,7 +32,7 @@
 ### Phase 1 — 도메인 + 채팅 골조
 
 - [x] persona 도메인(CRUD·소유권) — `name`/`tagline`/`description` 수준
-- [ ] persona 레거시 스키마 계승 — `core_value`(M:N) · `communication_style` · `moral_compass` · `personality_trait` · `tts_settings` 미구현(`docs/data-model.md`에 설계만). 페르소나별 프롬프트 해석(#22)과 방송국 프로필(FR-STATION-1)이 이걸 필요로 함
+- [ ] persona 레거시 스키마 계승 — `core_value`(M:N)·`communication_style` **완료**(#59, 프롬프트 해석까지). `moral_compass`·`personality_trait`는 관측성이 붙은 뒤(효과를 측정하며), `tts_settings`는 브로드캐스터 쪽
 - [x] 방(Room) — 개설·상태(pending/live/finished)·라이브 유일성. 채팅·후원·WS가 라이브 방에서만 된다. idle 루프와 미디어 송출(`hls_url`)의 전제
 - [ ] 토픽스레드 · MediaPacket/seq · 응답선별
 - [x] WebSocket 채팅 수신·브로드캐스트 (Redis pub/sub 백플레인)

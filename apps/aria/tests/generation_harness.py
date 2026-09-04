@@ -12,9 +12,12 @@ C-4-1 이후 응답은 요청이 끝난 뒤 워커가 만들어 방 채널로 �
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from redis.asyncio import Redis
 
 from aria.common.eventbus import Event
+from aria.common.persona_profile import PersonaProfile
 from aria.contexts.chat.adapter.outbound.inference.stub import StubPersonaLLM
 from aria.contexts.chat.adapter.outbound.redis.broadcast import RedisRoomBroadcaster
 from aria.contexts.chat.adapter.outbound.redis.coordinator import (
@@ -57,6 +60,22 @@ class RecordingEventBus:
         self.published.append(event)
 
 
+class StubProfiles:
+    """`PersonaProfilePort` 스텁.
+
+    기본은 **프로필 없음**이다 — 대부분의 테스트는 인격에 관심이 없고, 그때
+    시스템 메시지는 공통 프롬프트로 폴백한다. 인격을 보려는 테스트만 프로필을 준다.
+    """
+
+    def __init__(self, profile: PersonaProfile | None = None) -> None:
+        self._profile = profile
+        self.asked: list[UUID] = []
+
+    async def profile_of(self, persona_id: UUID) -> PersonaProfile | None:
+        self.asked.append(persona_id)
+        return self._profile
+
+
 def direct_bus(redis: Redis) -> DirectEventBus:
     """워커의 조립을 테스트용 Redis 하나로 재현한다 — `workers/generation.py`와 같은 모양."""
     return DirectEventBus(
@@ -64,5 +83,6 @@ def direct_bus(redis: Redis) -> DirectEventBus:
             coordinator=RedisResponseCoordinator(redis),
             llm=StubPersonaLLM(),
             broadcaster=RedisRoomBroadcaster(redis),
+            profiles=StubProfiles(),
         )
     )

@@ -14,7 +14,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from fakeredis import FakeAsyncRedis, FakeServer
-from generation_harness import RecordingEventBus, direct_bus
+from generation_harness import RecordingEventBus, StubProfiles, direct_bus
 from room_harness import live_room
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
@@ -382,6 +382,7 @@ async def test_preempted_reply_is_never_published(redis: FakeAsyncRedis) -> None
         coordinator=coordinator,
         llm=_PreemptingLLM(coordinator, room),
         broadcaster=broadcaster,
+        profiles=StubProfiles(),
     )
 
     await worker.handle(_request(room))
@@ -397,6 +398,7 @@ async def test_unpreempted_reply_is_published(redis: FakeAsyncRedis) -> None:
         coordinator=RedisResponseCoordinator(redis),
         llm=_StubLLM(),
         broadcaster=(broadcaster := _RecordingBroadcaster()),
+        profiles=StubProfiles(),
     )
 
     await worker.handle(_request(room))
@@ -415,6 +417,7 @@ async def test_worker_skips_generation_without_a_slot(redis: FakeAsyncRedis) -> 
         coordinator=coordinator,
         llm=_StubLLM(),
         broadcaster=(broadcaster := _RecordingBroadcaster()),
+        profiles=StubProfiles(),
     )
     await coordinator.try_acquire(room, ChatSource.SUPERCHAT)  # 이미 점유 중
 
@@ -430,7 +433,10 @@ async def test_worker_releases_the_slot_after_generating(
     room = uuid4()
     coordinator = RedisResponseCoordinator(redis)
     worker = ResponseGenerationService(
-        coordinator=coordinator, llm=_StubLLM(), broadcaster=_RecordingBroadcaster()
+        coordinator=coordinator,
+        llm=_StubLLM(),
+        broadcaster=_RecordingBroadcaster(),
+        profiles=StubProfiles(),
     )
 
     await worker.handle(_request(room))
@@ -493,6 +499,7 @@ async def test_superchat_stands_even_if_no_response_ever_comes(
         coordinator=coordinator,
         llm=_StubLLM(),
         broadcaster=(worker_out := _RecordingBroadcaster()),
+        profiles=StubProfiles(),
     )
     await worker.handle(GenerationRequest.from_payload(events.published[0].payload))
 

@@ -19,6 +19,7 @@ C-4-1에서 생성을 요청 경로 밖으로 꺼내면서 조율이 둘로 갈�
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -26,6 +27,8 @@ from uuid import UUID
 
 from aria.common.eventbus import Event, EventBusPort
 from aria.common.ids import new_id
+from aria.common.persona_profile import PersonaProfilePort
+from aria.contexts.chat.application.persona_prompt import system_message
 from aria.contexts.chat.application.port.out.broadcast import RoomBroadcaster
 from aria.contexts.chat.application.port.out.coordinator import ResponseCoordinator
 from aria.contexts.chat.application.port.out.llm import Message, PersonaLLMPort
@@ -33,6 +36,8 @@ from aria.contexts.chat.domain.source import ChatSource
 
 # durable 토픽. 슈퍼챗이 별도 토픽인 것은 `docs/events.md`의 결정 그대로다 — 다만
 # 우선순위를 지키는 것은 토픽 분리가 아니라 코디네이터다(위 docstring).
+logger = logging.getLogger(__name__)
+
 RESPONSE_REQUESTED = "aria.chat.response-requested"
 SUPERCHAT_REQUESTED = "aria.chat.superchat-requested"
 
@@ -137,10 +142,12 @@ class ResponseGenerationService:
         coordinator: ResponseCoordinator,
         llm: PersonaLLMPort,
         broadcaster: RoomBroadcaster,
+        profiles: PersonaProfilePort,
     ) -> None:
         self._coordinator = coordinator
         self._llm = llm
         self._broadcaster = broadcaster
+        self._profiles = profiles
 
     async def handle(self, request: GenerationRequest) -> None:
         slot = await self._coordinator.try_acquire(request.room_id, request.source)
@@ -150,9 +157,20 @@ class ResponseGenerationService:
             return
 
         try:
+            # 인격은 여기서 붙는다. 프로필이 없으면 공통 프롬프트로 폴백하되 그
+            # 사실을 남긴다 — 관측성이 붙으면 "몇 %가 프로필 없이 도는가"가 된다.
+            profile = await self._profiles.profile_of(request.persona_id)
+            if profile is None or not profile.has_voice():
+                logger.info(
+                    "페르소나 프로필 없음 — 공통 프롬프트로 답한다 persona_id=%s",
+                    request.persona_id,
+                )
             result = await self._llm.generate(
                 str(request.persona_id),
-                [Message(role="user", content=request.prompt)],
+                [
+                    system_message(profile),
+                    Message(role="user", content=request.prompt),
+                ],
             )
             if not await self._coordinator.still_holds(request.room_id, slot):
                 # 생성하는 동안 선점당했다 — 만들어 둔 응답을 버린다. 생성은 외부

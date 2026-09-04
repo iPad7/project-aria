@@ -121,6 +121,8 @@ flowchart LR
 
 ## 앱 ↔ 추론 경계
 
+> **인격은 프롬프트로, 모델 선택은 포트 뒤로.** 페르소나의 말투·가치관은 `PersonaProfilePort`로 chat에 건너와 **application이** `Message(role="system")` 하나로 합성한다(`chat/application/persona_prompt.py`). 어댑터에서 만들면 어댑터가 페르소나를 조회하게 되어 아래 경계가 한쪽에서 무너진다. LoRA가 붙어도 이 경로는 남는다 — LoRA가 말투를 잡고 시스템 프롬프트가 맥락·가치관을 준다. 그리고 이 경로로 나온 응답이 그 LoRA를 학습시킬 데이터가 된다.
+
 `PersonaLLMPort`(`contexts/chat/application/port/out/llm.py`)가 유일한 접점. 앱은 `persona_id`만 넘기고 모델 버전을 모른다 — 버전 해석은 경계 너머 레지스트리 alias. 어댑터는 `contexts/chat/adapter/outbound/inference`. OpenAI fallback도 같은 포트 뒤.
 
 추론 3역할(모두 OpenAI 호환 → 같은 어댑터, URL 스왑): 운영=vLLM(멀티-LoRA), fallback·로컬 dev=OpenAI, 학습·평가=transformers+trl+peft(별도 repo).

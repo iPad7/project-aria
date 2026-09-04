@@ -44,7 +44,7 @@
 | origin_story | text | |
 | created_at / updated_at | timestamptz | |
 
-### core_value / persona_core_value  *(M:N + 우선순위)*
+### core_value / persona_core_value  *(M:N + 우선순위)* — **구현됨**
 | core_value | | |
 |---|---|---|
 | id | uuid | PK |
@@ -53,19 +53,30 @@
 | persona_core_value | | |
 |---|---|---|
 | id | uuid | PK |
-| persona_id | uuid | FK→persona, cascade |
-| core_value_id | uuid | FK→core_value |
+| persona_id | uuid | index |
+| core_value_id | uuid | index |
 | priority | int | not null (정렬) |
-| — | — | unique(persona_id, core_value_id) |
+| — | — | unique(persona_id, core_value_id) — 같은 가치를 두 번 매달 수 없다 |
+| — | — | unique(persona_id, priority) — 우선순위가 겹치면 정렬이 흔들린다 |
+
+> 어휘 테이블의 실제 이름은 `persona_core_value_vocab`이다(연결 테이블이 `persona_core_value`를 차지하므로).
+
+> **가치관 목록은 통째로 교체한다.** 우선순위가 목록의 순서라서 하나만 빼거나 넣으면 나머지 순위가 전부 밀린다 — 부분 수정이 성립하지 않는다. 그래서 API도 원하는 최종 상태를 받는다(`PUT /personas/{id}/core-values`).
 
 ### communication_style / moral_compass / personality_trait  *(각 1:1 persona)*
+
+> **`communication_style`만 구현됐다**(테이블 `persona_communication_style`). `moral_compass`·`personality_trait`는 아직 설계다.
+>
+> 이유: `personality_trait`는 축이 10개인데(개방성·성실성·정서안정성…) 프롬프트로 바꿨을 때 응답 차이가 잘 드러나지 않고, **지금은 그걸 검증할 방법이 없다** — 관측성(Langfuse)이 아직 없다. 반면 말투와 가치관 우선순위는 즉시 눈에 보인다. 나머지 둘은 관측성이 붙은 뒤 효과를 측정하며 넣는다.
 | 테이블 | PK | 주요 컬럼 |
 |---|---|---|
 | communication_style | persona_id (FK) | tone, sentence_length, question_style, directness(int 1~5), empathy_expression |
 | moral_compass | persona_id (FK) | standard, rule_adherence, fairness |
 | personality_trait | persona_id (FK) | energy_direction, emotional_processing, judgment_decision, interpersonal_attitude, openness, conscientiousness, emotional_stability, social_sensitivity, risk_preference, time_orientation |
 
-### tts_settings  *(1:1 persona, ElevenLabs)*
+### tts_settings  *(1:1 persona, ElevenLabs)* — **범위 밖**
+
+> TTS는 브로드캐스터 쪽으로 나갔다(`docs/architecture.md`). 이 테이블이 aria에 남을지 브로드캐스터가 가질지는 그 슬라이스에서 정한다.
 | 컬럼 | 타입 | 비고 |
 |---|---|---|
 | persona_id | uuid | PK, FK→persona, cascade |
