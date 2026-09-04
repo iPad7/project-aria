@@ -16,6 +16,13 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://aria:aria@localhost:5432/aria"
     redis_url: str = "redis://localhost:6379/0"
 
+    # Durable event backbone (EventBusPort -> Kafka). The generation worker consumes
+    # from here; the API only publishes. Creating the broker does not connect, so
+    # keyless local runs and CI stay green without a broker.
+    kafka_bootstrap_servers: str = "localhost:9092"
+    # Consumer group for generation workers. Scaling out = more replicas in this group.
+    generation_consumer_group: str = "generation-workers"
+
     # app/inference boundary: persona_id -> inference serving base URL.
     # Empty -> OpenAI fallback behind PersonaLLMPort.
     inference_base_urls: dict[str, str] = {}

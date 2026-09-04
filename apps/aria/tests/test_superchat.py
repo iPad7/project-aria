@@ -14,6 +14,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from fakeredis import FakeAsyncRedis, FakeServer
+from generation_harness import RecordingEventBus, direct_bus
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 from starlette.testclient import TestClient
@@ -23,8 +24,15 @@ from aria.common.config import settings
 from aria.common.db import get_session
 from aria.common.redis import get_redis
 from aria.common.superchat import SuperchatReceipt
+from aria.contexts.chat.adapter.inbound import deps as chat_deps
 from aria.contexts.chat.adapter.outbound.redis.coordinator import (
     RedisResponseCoordinator,
+)
+from aria.contexts.chat.application.generation import (
+    SUPERCHAT_REQUESTED,
+    GenerationRequest,
+    GenerationRequestPublisher,
+    ResponseGenerationService,
 )
 from aria.contexts.chat.application.port.out.llm import GenParams, LLMResult, Message
 from aria.contexts.chat.application.service import ChatOrchestrationService
@@ -64,6 +72,8 @@ def client(session: Session, donor_id: UUID) -> Iterator[TestClient]:
     app = create_app()
     app.dependency_overrides[get_redis] = lambda: fake
     app.dependency_overrides[get_session] = lambda: session
+    # 워커를 같은 프로세스에서 태운다 — 감사 응답은 이제 워커가 만들어 발행한다.
+    app.dependency_overrides[chat_deps.get_event_bus] = lambda: direct_bus(fake)
     # context manager로 열어 요청들이 하나의 이벤트 루프를 공유하게 한다.
     with TestClient(app, raise_server_exceptions=False) as test_client:
         yield test_client
@@ -98,7 +108,7 @@ def _token(user_id: UUID) -> str:
 # --- HTTP: seam이 실제로 배선되는가 ----------------------------------------
 
 
-def test_superchat_debits_and_replies(
+def test_superchat_debits_and_records(
     client: TestClient, wallets: WalletService, donations: DonationService, donor_id
 ) -> None:
     room, persona = uuid4(), uuid4()
@@ -110,18 +120,45 @@ def test_superchat_debits_and_replies(
         headers=_headers(donor_id),
     )
 
+    # 차감은 동기라 즉시 확정된다. 감사 응답은 여기 없다 — 워커가 만들어 발행한다.
     assert res.status_code == 200
     body = res.json()
     assert body["balance_after"] == 700
-    assert body["reply"] is not None
-    # 후원 문구가 생성 입력에 실려 페르소나에게 전달됐다(스텁이 되돌려준다).
-    assert "300" in body["reply"]["text"]
-    assert "응원합니다" in body["reply"]["text"]
+    assert "reply" not in body
 
     recorded = donations.list_for_persona(persona)
     assert len(recorded) == 1
     assert str(recorded[0].id) == body["donation_id"]
     assert recorded[0].room_id == room  # 어느 방송에서 후원했는지 남는다
+
+
+def test_superchat_requests_generation_on_its_own_topic(
+    session: Session, wallets: WalletService, donor_id: UUID
+) -> None:
+    # 후원 문구가 생성 입력에 실려 전달되는지, 그리고 일반 채팅과 다른 토픽으로
+    # 가는지. 토픽이 갈라져 있어야 후원 쪽만 따로 재처리·DLQ를 걸 수 있다(C-4-2).
+    events = RecordingEventBus()
+    fake = FakeAsyncRedis(server=FakeServer(), decode_responses=True)
+    app = create_app()
+    app.dependency_overrides[get_redis] = lambda: fake
+    app.dependency_overrides[get_session] = lambda: session
+    app.dependency_overrides[chat_deps.get_event_bus] = lambda: events
+    wallets.grant(donor_id, 1000, idempotency_key="seed")
+
+    room = uuid4()
+    with TestClient(app, raise_server_exceptions=False) as client:
+        client.post(
+            f"/rooms/{room}/superchats",
+            json={"persona_id": str(uuid4()), "amount": 300, "message": "응원합니다"},
+            headers=_headers(donor_id),
+        )
+
+    [event] = events.published
+    assert event.stream == SUPERCHAT_REQUESTED
+    assert event.key == str(room)
+    assert event.payload["source"] == "superchat"
+    assert "300" in event.payload["prompt"]
+    assert "응원합니다" in event.payload["prompt"]
 
 
 def test_superchat_without_credit_is_rejected(
@@ -241,7 +278,10 @@ def test_ws_superchat_without_credit_keeps_connection(
         assert ws.receive_json()["type"] == "message"
 
 
-# --- 선점: 밀려난 응답을 버리는가 ------------------------------------------
+# --- 조율: 요청 경로와 워커가 각자 무엇을 책임지는가 ------------------------
+#
+# C-4-1에서 조율이 둘로 갈라졌다. 요청 경로는 차감·표시·요청 발행까지만 하고,
+# 슬롯과 생성은 워커가 한다. 그래서 검증도 둘로 나뉜다.
 
 
 class _FakeActivity:
@@ -252,6 +292,17 @@ class _FakeActivity:
 
     async def seconds_since_last(self, room_id: UUID) -> float | None:
         return None
+
+
+class _RecordingBroadcaster:
+    def __init__(self) -> None:
+        self.events: list[dict] = []
+
+    async def publish(self, room_id: UUID, event: dict) -> None:
+        self.events.append(event)
+
+    async def subscribe(self, room_id: UUID):  # pragma: no cover - 쓰지 않는다
+        raise NotImplementedError
 
 
 class _FakeSuperchat:
@@ -310,91 +361,156 @@ def redis() -> FakeAsyncRedis:
     return FakeAsyncRedis(server=FakeServer(), decode_responses=True)
 
 
-async def test_preempted_chat_reply_is_discarded(redis: FakeAsyncRedis) -> None:
+def _request(room: UUID, source: ChatSource = ChatSource.CHAT) -> GenerationRequest:
+    return GenerationRequest.create(room, uuid4(), source, "안녕")
+
+
+# --- 워커: 선점당한 응답을 버리는가 ------------------------------------------
+
+
+async def test_preempted_reply_is_never_published(redis: FakeAsyncRedis) -> None:
     room = uuid4()
     coordinator = RedisResponseCoordinator(redis)
-    service = ChatOrchestrationService(
-        activity=_FakeActivity(),
+    broadcaster = _RecordingBroadcaster()
+    worker = ResponseGenerationService(
         coordinator=coordinator,
         llm=_PreemptingLLM(coordinator, room),
-        superchat=_FakeSuperchat(),
+        broadcaster=broadcaster,
     )
 
-    outcome = await service.handle_user_message(
-        room_id=room, persona_id=uuid4(), author_id=uuid4(), text="안녕"
+    await worker.handle(_request(room))
+
+    # 생성은 끝났지만 그 사이 슈퍼챗이 슬롯을 가져갔다 — 만든 응답을 버린다.
+    assert broadcaster.events == []
+
+
+async def test_unpreempted_reply_is_published(redis: FakeAsyncRedis) -> None:
+    # 대조군 — 선점이 없으면 응답이 방 채널로 나간다.
+    room = uuid4()
+    worker = ResponseGenerationService(
+        coordinator=RedisResponseCoordinator(redis),
+        llm=_StubLLM(),
+        broadcaster=(broadcaster := _RecordingBroadcaster()),
     )
 
-    # 메시지는 받았지만 응답은 버린다 — 슈퍼챗이 그 사이 슬롯을 가져갔다.
-    assert outcome.accepted is True
-    assert outcome.reply is None
+    await worker.handle(_request(room))
+
+    [reply] = broadcaster.events
+    assert reply["type"] == "reply"
+    assert reply["source"] == "chat"
+    assert reply["text"] == "응답"
 
 
-async def test_unpreempted_reply_survives(redis: FakeAsyncRedis) -> None:
-    # 대조군 — 선점이 없으면 응답이 그대로 나온다.
+async def test_worker_skips_generation_without_a_slot(redis: FakeAsyncRedis) -> None:
+    # 같은/더 높은 우선순위가 응답 중이면 이 요청은 조용히 버린다.
     room = uuid4()
     coordinator = RedisResponseCoordinator(redis)
-    service = ChatOrchestrationService(
-        activity=_FakeActivity(),
+    worker = ResponseGenerationService(
         coordinator=coordinator,
         llm=_StubLLM(),
-        superchat=_FakeSuperchat(),
+        broadcaster=(broadcaster := _RecordingBroadcaster()),
     )
+    await coordinator.try_acquire(room, ChatSource.SUPERCHAT)  # 이미 점유 중
 
-    outcome = await service.handle_user_message(
-        room_id=room, persona_id=uuid4(), author_id=uuid4(), text="안녕"
-    )
+    await worker.handle(_request(room))
 
-    assert outcome.reply is not None
+    assert broadcaster.events == []
 
 
-async def test_superchat_stands_even_without_a_response_slot(
+async def test_worker_releases_the_slot_after_generating(
     redis: FakeAsyncRedis,
 ) -> None:
-    # 같은 우선순위(슈퍼챗 둘)가 겹치면 뒤엣것은 슬롯을 못 잡는다. 그래도 차감·기록은
-    # 이미 끝났으므로 후원 자체는 성립해야 한다 — 돈만 받고 사라지면 안 된다.
+    # 슬롯을 놓지 않으면 그 방은 영영 응답하지 못한다.
     room = uuid4()
     coordinator = RedisResponseCoordinator(redis)
-    charged = _FakeSuperchat()
-    service = ChatOrchestrationService(
-        activity=_FakeActivity(),
-        coordinator=coordinator,
-        llm=_StubLLM(),
-        superchat=charged,
+    worker = ResponseGenerationService(
+        coordinator=coordinator, llm=_StubLLM(), broadcaster=_RecordingBroadcaster()
     )
-    await coordinator.try_acquire(room, ChatSource.SUPERCHAT)  # 앞선 슈퍼챗이 점유 중
+
+    await worker.handle(_request(room))
+
+    assert await coordinator.try_acquire(room, ChatSource.IDLE) is not None
+
+
+# --- 요청 경로: 순서가 계약이다 ----------------------------------------------
+
+
+def _request_service(
+    broadcaster: _RecordingBroadcaster, events: RecordingEventBus, superchat
+) -> ChatOrchestrationService:
+    return ChatOrchestrationService(
+        activity=_FakeActivity(),
+        broadcaster=broadcaster,
+        generation=GenerationRequestPublisher(events),
+        superchat=superchat,
+    )
+
+
+async def test_superchat_display_is_published_before_generation_is_requested() -> None:
+    # 순서가 뒤집히면 "고맙습니다"가 후원 표시보다 먼저 나갈 수 있다.
+    broadcaster, events, charged = (
+        _RecordingBroadcaster(),
+        RecordingEventBus(),
+        _FakeSuperchat(),
+    )
+    service = _request_service(broadcaster, events, charged)
 
     outcome = await service.handle_superchat(
+        room_id=uuid4(), persona_id=uuid4(), donor_id=uuid4(), amount=300
+    )
+
+    assert charged.charges == [300]  # ① 차감
+    assert [e["type"] for e in broadcaster.events] == ["superchat"]  # ② 표시
+    assert len(events.published) == 1  # ③ 생성 요청
+    assert outcome.donation_id is not None
+
+
+async def test_superchat_stands_even_if_no_response_ever_comes(
+    redis: FakeAsyncRedis,
+) -> None:
+    # 슬롯을 못 잡아 감사 응답이 아예 안 생겨도 후원은 성립한 것이다 — 차감·기록은
+    # 이미 끝났고 후원 표시도 나갔다. 돈만 받고 사라지는 일은 없어야 한다.
+    room = uuid4()
+    coordinator = RedisResponseCoordinator(redis)
+    await coordinator.try_acquire(room, ChatSource.SUPERCHAT)  # 앞선 슈퍼챗이 점유 중
+
+    broadcaster, events, charged = (
+        _RecordingBroadcaster(),
+        RecordingEventBus(),
+        _FakeSuperchat(),
+    )
+    outcome = await _request_service(broadcaster, events, charged).handle_superchat(
         room_id=room, persona_id=uuid4(), donor_id=uuid4(), amount=300
     )
 
-    assert outcome.reply is None
+    worker = ResponseGenerationService(
+        coordinator=coordinator,
+        llm=_StubLLM(),
+        broadcaster=(worker_out := _RecordingBroadcaster()),
+    )
+    await worker.handle(GenerationRequest.from_payload(events.published[0].payload))
+
     assert outcome.donation_id is not None
-    assert charged.charges == [300]  # 차감은 일어났다
+    assert charged.charges == [300]
+    assert [e["type"] for e in broadcaster.events] == ["superchat"]
+    assert worker_out.events == []  # 감사 응답은 없다
 
 
-async def test_charge_failure_stops_before_any_generation(
-    redis: FakeAsyncRedis,
-) -> None:
-    # 순서가 계약이다 — 차감이 먼저고, 실패하면 슬롯도 잡지 않는다.
+async def test_charge_failure_publishes_nothing_at_all() -> None:
+    # 순서가 계약이다 — 차감이 먼저고, 실패하면 표시도 생성 요청도 없다.
     from aria.common.errors import InsufficientCreditError
 
     class _BrokeSuperchat:
         async def charge(self, *args: object, **kwargs: object) -> SuperchatReceipt:
             raise InsufficientCreditError("크레딧이 부족합니다")
 
-    room = uuid4()
-    coordinator = RedisResponseCoordinator(redis)
-    service = ChatOrchestrationService(
-        activity=_FakeActivity(),
-        coordinator=coordinator,
-        llm=_StubLLM(),
-        superchat=_BrokeSuperchat(),
-    )
+    broadcaster, events = _RecordingBroadcaster(), RecordingEventBus()
+    service = _request_service(broadcaster, events, _BrokeSuperchat())
 
     with pytest.raises(InsufficientCreditError):
         await service.handle_superchat(
-            room_id=room, persona_id=uuid4(), donor_id=uuid4(), amount=300
+            room_id=uuid4(), persona_id=uuid4(), donor_id=uuid4(), amount=300
         )
 
-    # 슬롯이 잡히지 않았다 = 다음 요청이 곧바로 응답할 수 있다.
-    assert await coordinator.try_acquire(room, ChatSource.IDLE) is not None
+    assert broadcaster.events == []
+    assert events.published == []

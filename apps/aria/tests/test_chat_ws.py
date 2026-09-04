@@ -3,12 +3,14 @@ from uuid import uuid4
 
 import pytest
 from fakeredis import FakeAsyncRedis, FakeServer
+from generation_harness import direct_bus
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from aria.app import create_app
 from aria.common.config import settings
 from aria.common.redis import get_redis
+from aria.contexts.chat.adapter.inbound import deps as chat_deps
 from aria.contexts.identity.adapter.outbound.security.jwt_token_service import (
     JwtTokenService,
 )
@@ -27,6 +29,8 @@ def client() -> Iterator[TestClient]:
     fake = FakeAsyncRedis(server=FakeServer(), decode_responses=True)
     app = create_app()
     app.dependency_overrides[get_redis] = lambda: fake
+    # 워커를 같은 프로세스에서 태운다 — 응답은 이제 워커가 만들어 방 채널로 발행한다.
+    app.dependency_overrides[chat_deps.get_event_bus] = lambda: direct_bus(fake)
     with TestClient(app) as test_client:
         yield test_client
 

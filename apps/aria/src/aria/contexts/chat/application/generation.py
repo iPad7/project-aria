@@ -1,0 +1,159 @@
+"""응답 생성 유스케이스 (generation-worker 쪽).
+
+C-4-1에서 생성을 요청 경로 밖으로 꺼내면서 조율이 둘로 갈라졌다:
+
+- `service.py`(api) — 활동 기록 · 화면 표시 발행 · **생성 요청 발행**. 즉시 끝난다.
+- 여기(worker) — 요청을 받아 **슬롯을 잡고** 생성하고 응답을 발행한다.
+
+**슬롯을 소비 시점에 잡는 이유.** 슬롯의 의미는 "지금 이 방에서 생성 중인 자"다.
+발행 시점에 잡으면 큐에서 기다리는 동안 슬롯을 쥐게 되어, 대기 중인 요청이 실제
+생성을 막는다. 그래서 `try_acquire`/`still_holds`/`release`가 전부 이쪽에 있다.
+
+**우선순위는 토픽 drain 순서가 아니라 코디네이터가 지킨다.** `docs/events.md`는 원래
+"워커가 superchat 토픽을 먼저 drain하고 없을 때만 normal을 처리"하는 Kafka 표준
+패턴을 적어 두었지만, 그건 우선순위 장치가 큐 순서밖에 없을 때의 이야기다. 우리는
+`ResponseCoordinator`가 이미 **진행 중인 생성을 선점**할 수 있다 — drain 순서보다
+강하다. 큐에서 아무리 잘 골라 봐야 이미 돌고 있는 채팅 응답은 못 멈추지만, 선점은
+멈춘다. 그래서 두 토픽을 나란히 구독하고 순서는 코디네이터에 맡긴다.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Any
+from uuid import UUID
+
+from aria.common.eventbus import Event, EventBusPort
+from aria.common.ids import new_id
+from aria.contexts.chat.application.port.out.broadcast import RoomBroadcaster
+from aria.contexts.chat.application.port.out.coordinator import ResponseCoordinator
+from aria.contexts.chat.application.port.out.llm import Message, PersonaLLMPort
+from aria.contexts.chat.domain.source import ChatSource
+
+# durable 토픽. 슈퍼챗이 별도 토픽인 것은 `docs/events.md`의 결정 그대로다 — 다만
+# 우선순위를 지키는 것은 토픽 분리가 아니라 코디네이터다(위 docstring).
+RESPONSE_REQUESTED = "aria.chat.response-requested"
+SUPERCHAT_REQUESTED = "aria.chat.superchat-requested"
+
+
+@dataclass(frozen=True)
+class GenerationRequest:
+    """생성 요청 — api가 발행하고 worker가 받는다.
+
+    **직렬화를 DTO 자신이 안다.** 보통은 어댑터의 일이지만, 이 페이로드는 발행 쪽
+    어댑터와 소비 쪽 어댑터 **양쪽**이 똑같이 알아야 한다. 어느 한쪽 어댑터에 두면
+    다른 쪽이 그것을 import하게 되고, 둘 사이에 모듈을 하나 더 만드는 것보다
+    dict 표현을 DTO에 붙이는 편이 짧다. Kafka를 아는 것은 아니다 — 평범한 dict다.
+    """
+
+    msg_id: UUID
+    room_id: UUID
+    persona_id: UUID
+    source: ChatSource
+    prompt: str
+    requested_at: datetime
+
+    @classmethod
+    def create(
+        cls, room_id: UUID, persona_id: UUID, source: ChatSource, prompt: str
+    ) -> GenerationRequest:
+        return cls(
+            # 중복 소비를 흡수할 멱등키. 지금은 실어 나르기만 하고, 실제 중복 제거는
+            # C-4-2(at-least-once 마감)의 몫이다.
+            msg_id=new_id(),
+            room_id=room_id,
+            persona_id=persona_id,
+            source=source,
+            prompt=prompt,
+            requested_at=datetime.now(UTC),
+        )
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "msg_id": str(self.msg_id),
+            "room_id": str(self.room_id),
+            "persona_id": str(self.persona_id),
+            "source": self.source.value,
+            "prompt": self.prompt,
+            "requested_at": self.requested_at.isoformat(),
+        }
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> GenerationRequest:
+        return cls(
+            msg_id=UUID(payload["msg_id"]),
+            room_id=UUID(payload["room_id"]),
+            persona_id=UUID(payload["persona_id"]),
+            source=ChatSource(payload["source"]),
+            prompt=payload["prompt"],
+            requested_at=datetime.fromisoformat(payload["requested_at"]),
+        )
+
+    def to_event(self) -> Event:
+        # 키가 room_id라 같은 방의 요청은 같은 파티션 → 순서가 보장된다.
+        stream = (
+            SUPERCHAT_REQUESTED
+            if self.source is ChatSource.SUPERCHAT
+            else RESPONSE_REQUESTED
+        )
+        return Event(stream=stream, key=str(self.room_id), payload=self.to_payload())
+
+
+class GenerationRequestPublisher:
+    """요청 경로가 생성을 맡기는 쪽. api가 쓴다."""
+
+    def __init__(self, events: EventBusPort) -> None:
+        self._events = events
+
+    async def request(
+        self, room_id: UUID, persona_id: UUID, source: ChatSource, prompt: str
+    ) -> GenerationRequest:
+        request = GenerationRequest.create(room_id, persona_id, source, prompt)
+        await self._events.publish(request.to_event())
+        return request
+
+
+class ResponseGenerationService:
+    """워커의 유스케이스. 요청 하나를 받아 응답 하나를 방송한다."""
+
+    def __init__(
+        self,
+        coordinator: ResponseCoordinator,
+        llm: PersonaLLMPort,
+        broadcaster: RoomBroadcaster,
+    ) -> None:
+        self._coordinator = coordinator
+        self._llm = llm
+        self._broadcaster = broadcaster
+
+    async def handle(self, request: GenerationRequest) -> None:
+        slot = await self._coordinator.try_acquire(request.room_id, request.source)
+        if slot is None:
+            # 더 높은/같은 우선순위가 응답 중이다. 이 요청은 조용히 버린다 —
+            # 사용자의 메시지·후원 표시는 이미 방송에 나갔고, 없는 것은 응답뿐이다.
+            return
+
+        try:
+            result = await self._llm.generate(
+                str(request.persona_id),
+                [Message(role="user", content=request.prompt)],
+            )
+            if not await self._coordinator.still_holds(request.room_id, slot):
+                # 생성하는 동안 선점당했다 — 만들어 둔 응답을 버린다. 생성은 외부
+                # 호출이라 중간에 취소할 수 없으므로, 취소 대신 내보내기 직전에 확인한다.
+                return
+            await self._broadcaster.publish(
+                request.room_id,
+                {
+                    "type": "reply",
+                    "room_id": str(request.room_id),
+                    "persona_id": str(request.persona_id),
+                    # 클라이언트가 감사 응답과 일반 응답을 구분하는 근거.
+                    "source": request.source.value,
+                    "text": result.text,
+                    "model_version": result.model_version,
+                },
+            )
+        finally:
+            await self._coordinator.release(request.room_id, slot)

@@ -18,16 +18,21 @@
 
 ### 코어 루프
 
-| 토픽 | producer | consumer group | key | 페이로드 |
-|---|---|---|---|---|
-| `aria.chat.response-requested` | chat (댓글 선별 후) | generation-workers | room_id | msg_id, room_id, persona_id, selected_comment, context, requested_at |
-| `aria.chat.superchat-requested` | chat (후원 수신) | generation-workers | room_id | msg_id, room_id, persona_id, donor, amount, message, requested_at |
-| `aria.streaming.response-generated` | generation-worker | media-workers | room_id | msg_id, room_id, persona_id, text, emotion, model_version, generated_at |
+| 토픽 | producer | consumer group | key | 페이로드 | 상태 |
+|---|---|---|---|---|---|
+| `aria.chat.response-requested` | chat api | `generation-workers` | room_id | msg_id, room_id, persona_id, source, prompt, requested_at | **구현됨** (C-4-1) |
+| `aria.chat.superchat-requested` | chat api (후원 수신) | `generation-workers` | room_id | 위와 같은 모양 (`source="superchat"`) | **구현됨** (C-4-1) |
+| `aria.streaming.response-generated` | generation-worker | media-workers | room_id | msg_id, room_id, persona_id, text, emotion, model_version, generated_at | 미구현 — media-worker가 없다 |
+
+> **두 요청 토픽의 페이로드는 같은 모양이다.** 원래 표는 `selected_comment`/`donor`처럼 서로 다른 필드를 적어 두었지만, 워커에게 필요한 것은 결국 "어느 방의 어느 페르소나가 무엇에 답하는가"뿐이라 하나의 `GenerationRequest`로 합쳤다. 후원 금액·메시지는 문구로 풀려 `prompt`에 들어간다. (`selected_comment`가 사라진 또 다른 이유: 선별(FR-GEN-1·2)이 아직 없어 실제로 실리는 것은 사용자가 보낸 원문이다.)
+
+> **응답은 Kafka로 돌아오지 않는다.** media-worker가 생기기 전까지 워커는 생성한 답변을 곧바로 **Redis pub/sub 방 채널**로 발행하고, api 프로세스의 WS 연결들이 그것을 받는다. 팬아웃이 이미 프로세스 경계를 넘고 있었기 때문에 클라이언트는 아무것도 바뀌지 않았다.
 
 > 미디어 합성 완료 후 시청자 알림(타임라인 splice)은 **Redis pub/sub**(아래). Kafka 토픽 아님.
-> **superchat 우선 = 별도 토픽.** Kafka는 파티션 내 우선순위가 없어 필드로는 불가 → generation-worker가 `superchat` 토픽을 먼저 drain하고 없을 때만 normal을 처리(Kafka 우선순위 표준 패턴).
 
-> ⚠️ **위 표는 아직 코드가 아니다.** Kafka 어댑터도 generation-worker도 없고, 현재 생성은 WS 핸들러 안에서 **인라인**으로 돈다. 그 구조에서는 우선순위를 `RedisResponseCoordinator`가 담당한다(아래). 별도 토픽이 필요해지는 시점은 워커가 생길 때이고, 그것이 C-4의 범위다.
+> **superchat이 별도 토픽인 이유가 바뀌었다.** 원래 근거는 "Kafka는 파티션 내 우선순위가 없으니 워커가 superchat 토픽을 먼저 drain한다"는 표준 패턴이었다. 그런데 우리에겐 이미 `ResponseCoordinator`가 있고, 그건 **진행 중인 생성까지 선점**할 수 있어 drain 순서보다 강하다 — 큐를 아무리 잘 골라도 이미 돌고 있는 채팅 응답은 멈추지 못하지만 선점은 멈춘다. 그래서 워커는 두 토픽을 나란히 구독하고 순서 다툼은 코디네이터에 맡긴다.
+>
+> 그럼에도 토픽을 합치지 않는 이유는 남아 있다: **소비 지연·재처리·DLQ를 후원 쪽만 따로 다룰 수 있어야 한다**(C-4-2). 돈이 오간 요청과 그냥 채팅은 실패했을 때 대응이 다르다.
 
 ### payments ↔ wallet
 
@@ -117,11 +122,29 @@ idle이 사연을 읽는 흐름은 Kafka가 아니라 **동기 읽기 포트**�
 
 앞의 것만 있으면 선점당한 쪽이 생성을 끝내고 답변을 그대로 발행해 버린다 — 슈퍼챗 감사 응답과 밀려난 채팅 응답이 둘 다 나가서 우선순위가 장식이 된다. 생성은 외부 호출이라 중간에 취소할 수 없으므로, 취소 대신 **결과를 내보내기 직전에 아직 내 슬롯인지 확인**한다.
 
+> **셋 다 워커에 있다**(C-4-1부터). `try_acquire`/`still_holds`/`release`는 요청 경로가 아니라 generation-worker의 것이다. 슬롯의 의미가 "지금 이 방에서 생성 중인 자"이기 때문이다 — 발행 시점에 잡으면 큐에서 기다리는 동안 슬롯을 쥐게 되어 대기 중인 요청이 실제 생성을 막는다.
+
+---
+
+## 생성은 요청 경로 밖에 있다 (C-4-1)
+
+api는 요청을 접수하고 **표시할 것을 발행한 뒤** 생성을 큐에 맡기고 즉시 끝난다. 워커가 만든 응답은 Redis pub/sub 방 채널로 나가 그 방을 구독한 모든 연결에 도달한다.
+
+- `POST /rooms/{id}/messages` → **202**, 응답 없음.
+- `POST /rooms/{id}/superchats` → 200이되 `donation_id`·`balance_after`만. 차감이 동기라 그 둘은 즉시 확정된다.
+- WS는 그대로다. 이미 구독으로 응답을 받고 있었기 때문에 **클라이언트 변경이 없다**.
+
+> **표시 프레임 발행이 라우터에서 유스케이스로 올라갔다.** 전에는 WS 라우터가 발행했는데, 그 결과 ① HTTP로 보낸 메시지는 방에 나타나지 않았고(전송마다 동작이 갈렸다) ② 후원에서는 워커가 감사 응답을 먼저 발행해 "고맙습니다"가 후원 표시보다 앞서 나가는 순서 뒤집힘이 가능했다. 순서가 계약이라면 그 순서는 한 곳에 있어야 한다.
+
+> **워커 진입점은 인바운드 어댑터다.** HTTP 라우터가 요청을 받아 애플리케이션 서비스를 부르듯 워커는 메시지를 받아 같은 일을 한다. 그래서 `EventBusPort`에 `subscribe`를 넣지 않았다 — 포트는 애플리케이션이 **밖을 부를 때** 필요한 것이고, 밖에서 안으로 들어오는 방향은 어댑터가 서비스를 직접 부른다. 합성 루트도 api와 별개다(`aria/workers/generation.py`).
+
+> **워커는 DB를 모른다.** 슬롯(Redis)·생성(포트 뒤)·발행(Redis pub/sub)이 전부다. 후원 차감은 이미 요청 경로에서 끝났으므로 워커가 wallet을 알 이유가 없다.
+
 ---
 
 ## 포트
 
-- `EventBusPort`(`aria.common.eventbus`) — Kafka publish(FastStream 어댑터). 도메인/애플리케이션은 Kafka를 모름. **어댑터 미구현** — 워커 진입점과 함께(C-4).
+- `EventBusPort`(`aria.common.eventbus`) — Kafka publish(FastStream 어댑터 `common.kafka.KafkaEventBus`). 도메인/애플리케이션은 Kafka를 모름. **발행 전용이며 앞으로도 그렇다** — 아래 참조.
 - `StoryFeedPort`(`aria.common.story_feed`) — 사연 소비. community가 구현, chat이 소비, `aria/app.py`가 배선.
 - `SuperchatPort`(`aria.common.superchat`) — 후원 결제. wallet이 구현, chat이 소비, `aria/app.py`가 배선.
 - `DonationRankingPort`(`aria.common.ranking`) — 열혈순위 집계. wallet이 구현, community가 소비, `aria/app.py`가 배선.
