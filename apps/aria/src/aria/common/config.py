@@ -26,6 +26,18 @@ class Settings(BaseSettings):
     # or a redelivery arriving after expiry slips through as a duplicate reply.
     dedup_ttl_seconds: int = 3600
 
+    # LLM observability (NFR-OBS-2 -> Langfuse). Off by default: keyless local runs
+    # and CI go through the no-op tracer, so instrumentation needs no `if enabled`.
+    langfuse_enabled: bool = False
+    langfuse_public_key: str | None = None
+    langfuse_secret_key: str | None = None
+    langfuse_host: str = "https://cloud.langfuse.com"
+    # Langfuse bills per *observation* (span/generation/score), not per trace. One
+    # response costs ~3, and the idle loop speaks every ~10s -- so sample by default.
+    # Sampling is applied per trace, so a response's span and generation share a fate.
+    langfuse_sample_rate: float = 0.2
+    langfuse_environment: str = "development"
+
     # Idle progress (FR-IDLE). Legacy used a 6s silence threshold.
     idle_threshold_seconds: float = 6.0
     # Must be shorter than the threshold, or the loop keeps missing idle windows.

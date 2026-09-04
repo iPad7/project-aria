@@ -7,13 +7,16 @@
 """
 
 import logging
+from contextlib import contextmanager
 
 import pytest
 
 from aria.common.config import settings
+from aria.common.tracing import _NullObservation
 from aria.contexts.chat.adapter.outbound.inference.factory import build_llm
 from aria.contexts.chat.adapter.outbound.inference.fallback import FallbackPersonaLLM
 from aria.contexts.chat.adapter.outbound.inference.stub import StubPersonaLLM
+from aria.contexts.chat.adapter.outbound.inference.traced import TracedPersonaLLM
 from aria.contexts.chat.application.port.out.llm import (
     GenParams,
     LLMResult,
@@ -39,6 +42,20 @@ class _FakeLLM:
 
 
 _MESSAGES = [Message(role="user", content="사연이 있어요")]
+
+
+class _RecordingTracing:
+    """`TracingPort` 스텁 — 어떤 구간이 어떤 순서로 열렸는지만 본다."""
+
+    def __init__(self) -> None:
+        self.names: list[str] = []
+
+    @contextmanager
+    def observe(self, name, *, kind="span", input=None, metadata=None, model=None):
+        self.names.append(name)
+        yield _NullObservation()
+
+    def flush(self) -> None: ...
 
 
 async def test_primary_success_does_not_touch_fallback() -> None:
@@ -105,15 +122,45 @@ async def test_arbitrary_exception_triggers_fallback_and_is_logged(
 # --- 합성 배선 (build_llm) ---------------------------------------------------
 
 
-def test_build_llm_without_fallback_returns_primary_unwrapped(
+def test_build_llm_without_fallback_has_no_fallback_layer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # 기본값. 폴백을 끄면 데코레이터를 씌우지 않는다 — 키 없는 로컬·CI 경로.
+    # 기본값. 폴백을 끄면 폴백 데코레이터를 씌우지 않는다 — 키 없는 로컬·CI 경로.
     # llm_backend도 고정한다 — 주변 ARIA_* 환경변수에 결과가 흔들리지 않도록.
+    #
+    # 계측 데코레이터는 **항상** 붙는다(관측이 꺼져 있어도 no-op로). 경로를 하나로
+    # 두어야 운영과 테스트의 객체 그래프가 갈라지지 않는다.
     monkeypatch.setattr(settings, "llm_backend", "stub")
     monkeypatch.setattr(settings, "llm_fallback_enabled", False)
 
-    assert isinstance(build_llm(), StubPersonaLLM)
+    llm = build_llm()
+
+    assert isinstance(llm, TracedPersonaLLM)
+    assert not isinstance(llm, FallbackPersonaLLM)
+    assert isinstance(llm._inner, StubPersonaLLM)
+
+
+async def test_tracing_wraps_each_backend_inside_the_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """폴백이 일어나면 generation이 **두 개** 남아야 한다.
+
+    바깥에 감싸면 호출 1건에 1개만 남아 "주 백엔드가 실패해서 폴백했다"가 트레이스에서
+    사라진다. 안쪽에 감싸면 그 사실이 그대로 보인다.
+    """
+    monkeypatch.setattr(settings, "llm_backend", "stub")
+    monkeypatch.setattr(settings, "llm_fallback_enabled", True)
+    monkeypatch.setattr(settings, "openai_api_key", "sk-test")
+    tracing = _RecordingTracing()
+
+    llm = build_llm(tracing)
+    # 주(stub)를 실패시켜 폴백을 태운다.
+    llm._primary._inner = _FakeLLM(model_version="vllm", error=RuntimeError("죽음"))
+    llm._fallback._inner = _FakeLLM(model_version="openai")
+
+    await llm.generate("p", _MESSAGES)
+
+    assert tracing.names == ["llm:primary", "llm:fallback"]
 
 
 def test_build_llm_with_fallback_composes(monkeypatch: pytest.MonkeyPatch) -> None:

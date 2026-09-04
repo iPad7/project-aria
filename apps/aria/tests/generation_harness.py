@@ -18,6 +18,7 @@ from redis.asyncio import Redis
 
 from aria.common.eventbus import Event
 from aria.common.persona_profile import PersonaProfile
+from aria.common.tracing import NoOpTracing
 from aria.contexts.chat.adapter.outbound.inference.stub import StubPersonaLLM
 from aria.contexts.chat.adapter.outbound.redis.broadcast import RedisRoomBroadcaster
 from aria.contexts.chat.adapter.outbound.redis.coordinator import (
@@ -84,5 +85,6 @@ def direct_bus(redis: Redis) -> DirectEventBus:
             llm=StubPersonaLLM(),
             broadcaster=RedisRoomBroadcaster(redis),
             profiles=StubProfiles(),
+            tracing=NoOpTracing(),
         )
     )

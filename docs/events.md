@@ -172,6 +172,7 @@ api는 요청을 접수하고 **표시할 것을 발행한 뒤** 생성을 큐�
 - `SuperchatPort`(`aria.common.superchat`) — 후원 결제. wallet이 구현, chat이 소비, `aria/app.py`가 배선.
 - `DonationRankingPort`(`aria.common.ranking`) — 열혈순위 집계. wallet이 구현, community가 소비, `aria/app.py`가 배선.
 - `UserDirectoryPort`(`aria.common.user_directory`) — 표시명 벌크 조회. identity가 구현, community가 소비, `aria/app.py`가 배선.
+- `TracingPort`(`aria.common.tracing`) — LLM 관측(NFR-OBS-2). Langfuse 어댑터는 `common.langfuse_tracing`, **기본은 `NoOpTracing`**. 서비스가 바깥 span을, `TracedPersonaLLM`이 안쪽 generation을 만든다.
 - `PersonaProfilePort`(`aria.common.persona_profile`) — 페르소나 인격(말투·가치관). persona가 구현, chat이 소비, `aria/workers/generation.py`가 배선. **`persona_id`를 인격으로 해석하는 유일한 경로다** — 그전까지 chat은 id를 받아 아무도 해석하지 않았다.
 
 ## 미확정

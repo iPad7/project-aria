@@ -12,10 +12,16 @@ from __future__ import annotations
 from openai import AsyncOpenAI
 
 from aria.common.config import settings
+from aria.common.tracing import NoOpTracing, TracingPort
 from aria.contexts.chat.adapter.outbound.inference.fallback import FallbackPersonaLLM
 from aria.contexts.chat.adapter.outbound.inference.openai_compat import OpenAICompatLLM
 from aria.contexts.chat.adapter.outbound.inference.stub import StubPersonaLLM
+from aria.contexts.chat.adapter.outbound.inference.traced import TracedPersonaLLM
 from aria.contexts.chat.application.port.out.llm import PersonaLLMPort
+
+
+def _traced(inner: PersonaLLMPort, tracing: TracingPort, name: str) -> PersonaLLMPort:
+    return TracedPersonaLLM(inner, tracing, name=name)
 
 
 def _build_primary_llm() -> PersonaLLMPort:
@@ -37,8 +43,15 @@ def _build_fallback_llm() -> PersonaLLMPort:
     return OpenAICompatLLM(client, settings.llm_fallback_model)
 
 
-def build_llm() -> PersonaLLMPort:
-    primary = _build_primary_llm()
+def build_llm(tracing: TracingPort | None = None) -> PersonaLLMPort:
+    """계측을 **폴백 안쪽**에 감싼다.
+
+    바깥에 감싸면 호출 1건에 generation 1개가 남아, 폴백이 일어난 사실이 트레이스에서
+    사라지고 `model_version`으로만 추측하게 된다. 안쪽에 감싸면 폴백 시 generation이
+    **두 개** 남아 "주 백엔드가 실패해서 폴백했다"가 그대로 보인다.
+    """
+    tracing = tracing or NoOpTracing()
+    primary = _traced(_build_primary_llm(), tracing, "llm:primary")
     if not settings.llm_fallback_enabled:
         return primary
     if not settings.openai_api_key:
@@ -48,4 +61,6 @@ def build_llm() -> PersonaLLMPort:
             "ARIA_LLM_FALLBACK_ENABLED=true 인데 ARIA_OPENAI_API_KEY 가 없습니다. "
             "키를 주거나 폴백을 끄세요."
         )
-    return FallbackPersonaLLM(primary, _build_fallback_llm())
+    return FallbackPersonaLLM(
+        primary, _traced(_build_fallback_llm(), tracing, "llm:fallback")
+    )
