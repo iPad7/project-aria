@@ -36,6 +36,15 @@ from aria.contexts.chat.domain.source import ChatSource
 RESPONSE_REQUESTED = "aria.chat.response-requested"
 SUPERCHAT_REQUESTED = "aria.chat.superchat-requested"
 
+# 페이로드 스키마 버전. 소비자가 모르는 버전을 만나면 추측하지 않고 DLQ로 보낸다 —
+# 필드가 바뀐 메시지를 옛 코드가 반쯤 읽어 이상한 응답을 내보내는 것이 최악이다.
+# 지금 넣는 비용이 거의 0이라 소비자가 우리 자신뿐일 때 미리 넣어 둔다.
+SCHEMA_VERSION = 1
+
+
+class UnsupportedSchemaVersion(ValueError):
+    """모르는 페이로드 버전. 잡아서 DLQ로 보내라는 신호다."""
+
 
 @dataclass(frozen=True)
 class GenerationRequest:
@@ -59,8 +68,7 @@ class GenerationRequest:
         cls, room_id: UUID, persona_id: UUID, source: ChatSource, prompt: str
     ) -> GenerationRequest:
         return cls(
-            # 중복 소비를 흡수할 멱등키. 지금은 실어 나르기만 하고, 실제 중복 제거는
-            # C-4-2(at-least-once 마감)의 몫이다.
+            # 중복 소비를 흡수하는 멱등키. 워커가 `ProcessedRegistry`로 이걸 claim한다.
             msg_id=new_id(),
             room_id=room_id,
             persona_id=persona_id,
@@ -71,6 +79,7 @@ class GenerationRequest:
 
     def to_payload(self) -> dict[str, Any]:
         return {
+            "v": SCHEMA_VERSION,
             "msg_id": str(self.msg_id),
             "room_id": str(self.room_id),
             "persona_id": str(self.persona_id),
@@ -81,6 +90,12 @@ class GenerationRequest:
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> GenerationRequest:
+        # 버전이 없으면 1로 본다 — C-4-2 이전에 발행돼 큐에 남아 있던 메시지.
+        version = payload.get("v", 1)
+        if version != SCHEMA_VERSION:
+            raise UnsupportedSchemaVersion(
+                f"모르는 페이로드 버전 {version} (지원: {SCHEMA_VERSION})"
+            )
         return cls(
             msg_id=UUID(payload["msg_id"]),
             room_id=UUID(payload["room_id"]),

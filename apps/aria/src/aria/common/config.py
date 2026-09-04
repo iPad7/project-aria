@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     kafka_bootstrap_servers: str = "localhost:9092"
     # Consumer group for generation workers. Scaling out = more replicas in this group.
     generation_consumer_group: str = "generation-workers"
+    # How long a processed-message claim lives. Must outlast the redelivery window,
+    # or a redelivery arriving after expiry slips through as a duplicate reply.
+    dedup_ttl_seconds: int = 3600
 
     # app/inference boundary: persona_id -> inference serving base URL.
     # Empty -> OpenAI fallback behind PersonaLLMPort.
