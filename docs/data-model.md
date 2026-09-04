@@ -110,7 +110,27 @@
 | — | — | unique(persona_id, user_id) |
 
 ### rankings (열혈순위) — **파생 read model, 테이블 없음**
-`SELECT persona_id, SUM(amount) FROM donation GROUP BY persona_id` 형태로 `wallet.donation`에서 집계.
+
+방송국 페이지가 보여주는 것은 **그 페르소나의 후원자 순위**다(FR-STATION-6). `wallet_donation`에서 집계한다:
+
+```sql
+SELECT donor_id, SUM(amount), COUNT(*)
+FROM wallet_donation
+WHERE persona_id = ? AND donor_id IS NOT NULL
+GROUP BY donor_id
+ORDER BY SUM(amount) DESC, MIN(created_at) ASC
+LIMIT ?
+```
+
+> **이전 판은 `GROUP BY persona_id`로 적혀 있었다.** 그건 "어느 스트리머가 제일 많이 받았나"라는 전체 리더보드이고, "**방송국은** 후원 랭킹을 표시한다"는 요구사항과 다른 화면이다. C-3에서 후원자 순위로 정정했다. 페르소나 리더보드가 필요해지면 같은 테이블에서 따로 뽑는다.
+
+> **`donor_id IS NULL`은 제외한다.** 익명 후원은 서로 다른 사람의 것이 섞여 있어, 한 줄로 합치면 실제로 그만큼 후원한 사람이 없는 1위가 만들어진다.
+
+> **동점은 먼저 후원한 사람이 앞이다.** 정렬 기준이 금액 하나뿐이면 같은 금액끼리 순서가 실행마다 달라져 화면이 이유 없이 흔들린다.
+
+> **테이블을 두지 않는 이유.** 후원은 저볼륨이고 집계는 `(persona_id, donor_id)` 인덱스 하나로 충분하다. read model 테이블을 두면 갱신 누락이라는 정합성 문제를 새로 만드는데, 얻는 것이 그만큼 크지 않다. 대신 조회 앞에 TTL 캐시를 둔다(좋아요 수와 같은 데코레이터 방식) — 새 후원이 순위에 반영되기까지 최대 TTL만큼 늦는 것은 감수한다. 무효화 훅을 만들자고 차감 경로에 캐시 의존을 끼워 넣으면 결제 트랜잭션이 Redis 장애에 묶인다.
+
+> **금액은 wallet, 이름은 identity, 화면은 community.** 컨텍스트끼리 import하지 않으므로 계약이 커널에 산다 — `common.ranking`의 `DonationRankingPort`(wallet 구현)와 `common.user_directory`의 `UserDirectoryPort`(identity 구현). 배선은 합성 루트(`docs/events.md`).
 
 ---
 
@@ -178,8 +198,11 @@
 | amount | int | 크레딧, not null (도메인 > 0) |
 | message | varchar | nullable |
 | created_at / updated_at | timestamptz | `ix_wallet_donation_persona_created` (persona_id, created_at DESC) |
+| — | — | `ix_wallet_donation_persona_donor` (persona_id, donor_id) — 열혈순위 집계 |
 
 > **결정**: donation을 wallet 컨텍스트에(크레딧 spend 기록). `community` 랭킹·`streaming` 표시가 읽음. 지급/사용의 정합은 `credit_transaction` 원장이 담당(잔액은 materialized).
+
+> **인덱스가 둘인 이유.** 방송국의 후원 목록은 최신순 스캔(`persona_id, created_at DESC`)이고, 열혈순위는 한 페르소나의 로우를 `donor_id`로 묶는 집계(`persona_id, donor_id`)다. 접근 형태가 달라 하나로 겸할 수 없다. `amount`를 뒤에 붙여 커버링 인덱스로 만드는 선택지도 있지만, 후원 로우 폭이 좁아 힙 접근이 싸므로 실측 전에는 넣지 않는다.
 
 > **잔액과 원장을 한 트랜잭션에 갱신한다.** 트랜잭션 경계를 서비스가 쥘 수 없어서(서비스는 Session을 모른다) **원자적 단위 자체를 포트 연산으로** 표현했다 — `WalletRepository.apply(entry, donation=…)` 한 번의 호출이 원장 append + 잔액 갱신 + 후원 기록을 함께 한다.
 

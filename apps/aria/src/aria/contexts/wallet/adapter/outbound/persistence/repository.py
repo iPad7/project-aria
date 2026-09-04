@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import update
+from sqlalchemy import func, update
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
@@ -20,6 +20,7 @@ from aria.contexts.wallet.adapter.outbound.persistence.model import (
 from aria.contexts.wallet.domain.model import (
     CreditTransaction,
     Donation,
+    DonorTotal,
     TransactionType,
 )
 
@@ -170,3 +171,27 @@ class SqlModelDonationRepository:
             .offset(offset)
         ).all()
         return [_donation_to_domain(row) for row in rows]
+
+    def top_donors(self, persona_id: UUID, *, limit: int) -> list[DonorTotal]:
+        total = func.sum(col(DonationTable.amount))
+        # 동점은 **먼저 후원한 사람이 앞**이다. 정렬 기준이 하나뿐이면 같은 금액끼리
+        # 순서가 실행마다 달라져 화면이 이유 없이 흔들린다.
+        first_at = func.min(col(DonationTable.created_at))
+        rows = self._session.exec(
+            select(
+                col(DonationTable.donor_id),
+                total.label("total_amount"),
+                func.count().label("donation_count"),
+            )
+            .where(
+                DonationTable.persona_id == persona_id,
+                col(DonationTable.donor_id).is_not(None),
+            )
+            .group_by(col(DonationTable.donor_id))
+            .order_by(total.desc(), first_at.asc())
+            .limit(limit)
+        ).all()
+        return [
+            DonorTotal(donor_id=donor_id, total_amount=amount, donation_count=count)
+            for donor_id, amount, count in rows
+        ]

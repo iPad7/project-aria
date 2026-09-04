@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Protocol
 from uuid import UUID
 
-from aria.contexts.wallet.domain.model import CreditTransaction, Donation
+from aria.contexts.wallet.domain.model import CreditTransaction, Donation, DonorTotal
 
 
 class WalletRepository(Protocol):
@@ -46,3 +46,11 @@ class DonationRepository(Protocol):
     def list_by_persona(
         self, persona_id: UUID, *, limit: int, offset: int
     ) -> list[Donation]: ...
+
+    def top_donors(self, persona_id: UUID, *, limit: int) -> list[DonorTotal]:
+        """한 페르소나의 후원자를 누적 금액 내림차순으로(열혈순위, FR-STATION-6).
+
+        `donor_id`가 없는 후원은 제외한다 — 서로 다른 사람의 익명 후원을 한 줄로
+        합치면 실재하지 않는 1위가 만들어진다.
+        """
+        ...

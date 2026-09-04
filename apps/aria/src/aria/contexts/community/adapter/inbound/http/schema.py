@@ -40,3 +40,16 @@ class StoryResponse(SchemaBase):
 class LikeCountResponse(SchemaBase):
     persona_id: UUID
     count: int
+
+
+class SupporterResponse(SchemaBase):
+    """열혈순위 한 줄.
+
+    `display_name`이 null이면 탈퇴한 사용자다 — 클라이언트가 대체 표기를 정한다.
+    """
+
+    rank: int
+    donor_id: UUID
+    display_name: str | None
+    total_amount: int
+    donation_count: int

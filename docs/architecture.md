@@ -40,7 +40,7 @@ flowchart LR
   media -.->|notify| redis
   api -.->|idle · StoryFeedPort| community
   viewer -->|superchat| wallet
-  wallet -->|rankings| community
+  wallet -.->|DonationRankingPort| community
   viewer -->|pay| payments
   payments <-->|charge · webhook| toss
   payments -->|outbox → Kafka| kafka
@@ -80,7 +80,7 @@ flowchart LR
 - **횡단 관심사 → `common`.** 인증(authN)이 대표 예: `common/auth.py`가 Bearer 토큰을 검증해 `Principal(user_id, is_staff)`를 돌려준다. 어느 컨텍스트든 identity를 몰라도 "누가 요청했나"를 얻는다. 토큰 **발급은 identity**(로그인), **검증은 common** — 같은 secret, 책임 분리.
   > **관리자 여부는 토큰 클레임(`staff`)이다.** DB에서 매번 조회하려면 common이 identity를 import해야 하는데 커널 순수성 계약이 그것을 금지한다. 기존 분업(발급=identity, 검증=common) 위에 클레임 하나를 얹는 것이 유일하게 계약을 지키는 길이다. 대가는 **권한 회수가 토큰 만료 시점에 반영**된다는 것. 관리자 전용 엔드포인트는 `require_staff` 의존성을 쓴다(예: `POST /wallet/grants`).
 - **단순 참조 → 불투명 id.** 다른 컨텍스트의 엔티티는 UUID로만 참조한다(예: `persona.owner_id` = identity의 user id). 전체 객체를 끌어오지 않고, **DB에서도 cross-context FK를 걸지 않는다**(인덱스만) — 독립을 물리 스키마까지.
-- **진짜 협력 → 이벤트.** 상태 변화 통지는 Kafka(`EventBusPort`)로(예: payments→wallet).
+- **진짜 협력 → 이벤트 또는 포트.** 상태 변화 **통지**는 Kafka(`EventBusPort`)로(예: payments→wallet). 반면 즉시 답이 필요하거나(후원 차감) 조회 시점의 질문인 것(사연 claim, 열혈순위)은 **커널에 둔 동기 포트**로 한다 — 계약이 `common`에 있으면 이벤트든 포트든 컨텍스트 독립은 똑같이 지켜진다. 어느 쪽인지의 판단 근거는 `docs/events.md`.
 
 합성 루트(`aria/app.py`)만이 common과 모든 컨텍스트를 함께 안다 — 그게 합성 루트의 일이라 common 밖 최상위에 둔다.
 
@@ -88,7 +88,9 @@ flowchart LR
 
 `community` = 스트리머별 팬덤 채널의 UGC(사연 게시판·좋아요·랭킹). `persona`(AI 캐릭터 설정)와 바뀌는 이유가 달라 별도 컨텍스트.
 - **Story(사연)** 는 `community`가 소유(게시판 CRUD). `chat`의 idle은 직접 import 없이 **읽기 포트/이벤트**로 pending 사연을 소비(FR-STATION-4 → FR-IDLE-2).
-- **랭킹(열혈순위)** 은 후원 이벤트 기반 read model.
+- **랭킹(열혈순위)** 은 테이블 없는 파생 read model이다(FR-STATION-6). 후원 금액은 `wallet`이, 후원자 표시명은 `identity`가 갖고 있고, community는 조회 시점에 둘을 합쳐 순위표를 만든다 — 직접 import 없이 커널의 **동기 읽기 포트** `DonationRankingPort`·`UserDirectoryPort`로. 배선은 합성 루트.
+
+> 처음에는 "후원 이벤트 기반 read model"로 적어 두었으나, 그러려면 community가 자체 집계 테이블을 두고 이벤트로 갱신해야 한다. 후원은 저볼륨이고 집계는 인덱스 하나로 끝나므로, 갱신 누락이라는 정합성 문제를 새로 만들 이유가 없다. 비용은 조회 앞의 TTL 캐시가 받는다(`docs/events.md`).
 
 ## 앱 ↔ 추론 경계
 

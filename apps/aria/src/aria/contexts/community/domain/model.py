@@ -13,7 +13,7 @@ from __future__ import annotations
 from enum import Enum
 from uuid import UUID
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from aria.common.domain import Entity
 
@@ -49,6 +49,23 @@ class Story(Entity):
         누가 썼는지는 남아 있어야 하기 때문이다.
         """
         return None if self.is_anonymous else self.author_id
+
+
+class Supporter(BaseModel):
+    """열혈순위 한 줄 — 후원 금액에 표시명을 붙인 것(FR-STATION-6).
+
+    엔티티가 아니다. community가 저장하는 것이 아니라 wallet의 집계와 identity의
+    이름을 조회 시점에 합쳐 만드는 read model이라, 고유 id도 수명도 없다.
+
+    `display_name`이 없을 수 있다 — 탈퇴한 사용자다. 여기서 "(알 수 없음)" 같은 것을
+    만들어 넣지 않고 없음을 그대로 표현한다. 무엇을 대신 보여줄지는 화면의 몫이다.
+    """
+
+    rank: int = Field(ge=1)
+    donor_id: UUID
+    display_name: str | None = None
+    total_amount: int = Field(gt=0)
+    donation_count: int = Field(gt=0)
 
 
 class Like(Entity):

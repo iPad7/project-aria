@@ -60,11 +60,20 @@ class DonationTable(UUIDMixin, TimestampMixin, table=True):
     amount: int
     message: str | None = None
 
-    # 방송국 후원 목록/열혈순위(C-3)가 타는 인덱스.
     __table_args__ = (
+        # 방송국 후원 목록(최신순).
         Index(
             "ix_wallet_donation_persona_created",
             "persona_id",
             text("created_at DESC"),
+        ),
+        # 열혈순위(FR-STATION-6)의 집계. `GROUP BY donor_id`가 한 페르소나의 로우를
+        # 정렬 없이 훑도록 선두 컬럼을 persona_id로 둔다. amount를 뒤에 붙여
+        # 커버링 인덱스로 만드는 것도 가능하지만, 후원 로우 폭이 좁아 힙 접근이
+        # 싸므로 실측 전에는 넣지 않는다.
+        Index(
+            "ix_wallet_donation_persona_donor",
+            "persona_id",
+            "donor_id",
         ),
     )

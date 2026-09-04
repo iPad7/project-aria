@@ -99,3 +99,15 @@ class Donation(Entity):
     room_id: UUID | None = None
     amount: int = Field(gt=0)
     message: str | None = Field(default=None, max_length=200)
+
+
+class DonorTotal(BaseModel):
+    """한 후원자가 한 페르소나에 쌓은 누적 — 열혈순위의 한 줄.
+
+    엔티티가 아니다. 저장되는 것이 아니라 `Donation`들을 집계해서 그때그때 만들어지는
+    값이라, 고유 id도 수명도 없다(`Wallet`이 `Entity`가 아닌 것과 같은 이유).
+    """
+
+    donor_id: UUID
+    total_amount: int = Field(gt=0)
+    donation_count: int = Field(gt=0)

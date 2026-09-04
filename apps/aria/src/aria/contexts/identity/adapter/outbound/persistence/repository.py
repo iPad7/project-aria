@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from uuid import UUID
 
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from aria.contexts.identity.adapter.outbound.persistence.model import UserTable
 from aria.contexts.identity.domain.model import User
@@ -47,3 +48,12 @@ class SqlModelUserRepository:
     def get_by_id(self, user_id: UUID) -> User | None:
         row = self._session.get(UserTable, user_id)
         return _to_domain(row) if row is not None else None
+
+    def list_by_ids(self, user_ids: Sequence[UUID]) -> list[User]:
+        if not user_ids:
+            # 빈 IN 절은 DB마다 다루기가 다르다. 어차피 결과가 없으니 묻지 않는다.
+            return []
+        rows = self._session.exec(
+            select(UserTable).where(col(UserTable.id).in_(user_ids))
+        ).all()
+        return [_to_domain(row) for row in rows]
