@@ -8,11 +8,18 @@
 
 - [x] 기반 슬라이스 (#8) — 공통 커널 · identity(회원가입·로그인·JWT) · persona(CRUD·소유권) · chat 조율 골조(Redis 분산락·우선순위 선점·펜싱)
 - [x] 실시간 종단 + 인프라 (#15) — docker-compose·Alembic 실체화 · WebSocket 전송(첫 프레임 인증) · Redis pub/sub 팬아웃(서버 2대 수평확장 실증)
-- [ ] 진행 중 (Phase 3, #21 — 순서 확정) — **A** 실제 생성 **완료** → **B** community 슬라이스(사연·좋아요) **완료** → **C** superchat: C-1 wallet **완료** · C-2 후원 종단 **완료** · C-3 열혈순위 **완료** · C-4 durability — C-4-1 배관(Kafka 어댑터·generation-worker·생성 이동) **완료** · C-4-2 내구성 마감(토픽별 전달 의미론·`msg_id` 멱등·DLQ·수평확장 실증) **완료** → **슬라이스 C 완료** → 이후 **ML 플랫폼**(SFT·평가). 근거: 쓸 수 있는 걸 먼저 만들어 데이터·기준선을 확보한 뒤 자체 모델로 전환. WS 구독 공유 최적화는 부하가 실측되기 전이라 보류.
+- [x] Phase 3 슬라이스 (#21) — **A** 실제 생성 **완료** → **B** community 슬라이스(사연·좋아요) **완료** → **C** superchat: C-1 wallet **완료** · C-2 후원 종단 **완료** · C-3 열혈순위 **완료** · C-4 durability — C-4-1 배관(Kafka 어댑터·generation-worker·생성 이동) **완료** · C-4-2 내구성 마감(토픽별 전달 의미론·`msg_id` 멱등·DLQ·수평확장 실증) **완료** → **슬라이스 C 완료**. 이어서 방(Room)·idle 루프를 umbrella 밖에서 붙였습니다. WS 구독 공유 최적화는 부하가 실측되기 전이라 보류.
   - **A-1** OpenAI 호환 어댑터로 `PersonaLLMPort` 실체화(#23) + 폴백 합성(#32) — 완료
   - **A-2** 자체 vLLM 서빙 — 완료. A.X-4.0-Light를 4비트 AWQ로 직접 양자화(4.6GB)해 RTX 5050에서 서빙하고, aria → LAN → 자체 vLLM 종단을 검증했습니다. 추론 서빙은 GPU 하드 경계라 별도 repo — [project-aria-inference](https://github.com/iPad7/project-aria-inference).
   - A-1의 남은 절반(페르소나별 시스템 프롬프트 해석)은 #22에서 계속 추적합니다. 운영 경로에서는 페르소나 구별이 포트 뒤 멀티-LoRA로 일어나므로, 이건 OpenAI 경로와 자체 모델 도입 전까지의 수단입니다.
   - **기준선은 A-1의 OpenAI로 유지합니다.** 8GB VRAM 때문에 택한 4비트 양자화가 나중에 SFT 모델을 평가하는 잣대가 되어선 안 되기 때문입니다. A-2는 "자체 GPU에서 자체 모델이 돈다"는 실증입니다.
+
+- [ ] **다음 — LLM 코어** (순서 확정). 근거: *"쓸 수 있는 걸 먼저 만들어 데이터·기준선을 확보한 뒤 자체 모델로 전환"* 이라는 이 문서의 원칙에서 **이제 앞의 절반이 끝났습니다.** 배관은 깔렸는데 정작 흐르는 것이 페르소나답지 않은 상태라, 다음은 그 안쪽입니다.
+  1. **페르소나 해석**(#22) + persona 레거시 스키마 — `Persona`는 지금 `name/tagline/description`뿐이고 `core_value`·`communication_style`·`moral_compass`·`personality_trait`가 하나도 없습니다. `persona_id`를 포트에 넘기지만 **해석하는 코드가 없어**, PRD가 말하는 "페르소나별 성격·말투로 반응한다"가 아직 구현되지 않았습니다
+  2. **댓글 선별**(FR-GEN-1·2) — 토픽 군집화 · 베스트 댓글 선별. "AI가 무엇에 반응할지 고른다"는 스트리머다움의 핵심이고, 임베딩·군집화·랭킹이라 진짜 ML 작업입니다
+  3. **관측성/평가** — OTel·SigNoz·Langfuse가 확정 스택인데 **의존성조차 없습니다**. 4번의 전제입니다 — 기준선이 없으면 SFT 결과를 평가할 수 없습니다
+  4. **ML 플랫폼** — SFT · DPO · 평가 · 레지스트리
+  5. **미디어 송출** — 데모가 필요해질 때. **브로드캐스터를 분리했으므로 그때 aria는 바뀌지 않습니다**(`docs/architecture.md`), 그래서 미룰 수 있는 결정이 됐습니다
 
 ## 기능 로드맵
 
@@ -37,10 +44,12 @@
 - [x] inference 어댑터 + OpenAI fallback (포트 뒤) — `OpenAICompatLLM`(#23) · `FallbackPersonaLLM`(#32). 기본값은 `stub`이라 키 없는 로컬·CI는 그대로 통과
 - [x] idle 자동 진행(사연·자율발화, FR-IDLE-1·2·3) — idle 워커가 라이브 방을 훑어 사연을 읽거나 자율발화한다. **FR-STATION-4 → FR-IDLE-2 사슬 연결됨** — `StoryFeedPort`(#42)가 드디어 소비자를 얻었다
 
-### Phase 3 — 미디어 송출 (서버합성 HLS)
+### Phase 3 — 미디어 송출 (**브로드캐스터 분리** · RTMP → HLS)
 
-- [ ] TTS 어댑터
-- [ ] 합성 워커: 클립 선택 + TTS mux → ffmpeg → HLS 세그먼트
+- [ ] TTS 어댑터 — **브로드캐스터 쪽**이다(aria 아님). ElevenLabs 무료 티어는 idle 루프가 계속 발화하는 구조상 금방 소진되므로, 로컬 TTS도 후보
+- [ ] **플랫폼 쪽(aria)**: RTMP ingest → HLS 패키징, `chat_room.hls_url` 채우기. 대부분 기성품(MediaMTX 등) 설정
+- [ ] **브로드캐스터(별도 repo)**: `response-generated` 구독 → TTS → 아바타 + 자막 합성 → RTMP push. 1차는 headless(정지 이미지 + ffmpeg), VTS는 그것을 교체하는 형태
+  > 서버합성에서 바꾼 이유와 대가는 `docs/architecture.md`. 핵심은 **아바타를 무엇으로 하든 aria가 바뀌지 않는다**는 것
 - [ ] idle 루프 타임라인 + 응답 splice, CDN
 
 ### Phase 4 — 재현 마무리

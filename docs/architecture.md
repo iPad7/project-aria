@@ -8,19 +8,26 @@ aria(모노레포: 앱 모놀리스 + payments 서비스)의 구조와 근거. �
 flowchart LR
   viewer([Viewer])
 
-  subgraph aria[aria app monolith]
+  subgraph aria[aria app monolith · 플랫폼]
     direction TB
     api[api<br/>WS · REST]
     gen[generation-worker]
-    media[media-worker]
+    idle[idle-worker]
+    ingest[ingest<br/>RTMP → HLS]
     wallet[wallet<br/>balance · ledger]
     community[community<br/>story · like · ranking]
+  end
+
+  subgraph bcast[broadcaster · 스트리머 측 · 별도 repo]
+    direction TB
+    avatar[아바타 렌더<br/>VTS · 정지이미지]
+    encoder[인코더<br/>ffmpeg · OBS]
   end
 
   kafka[[Kafka]]
   redis[(Redis pub/sub)]
   inf[inference<br/>vLLM · OpenAI]
-  tts[ElevenLabs]
+  tts[TTS<br/>ElevenLabs · 로컬]
   cdn[S3 · CloudFront]
   payments[payments service]
   toss[Toss PG]
@@ -32,13 +39,14 @@ flowchart LR
   kafka -->|response-requested| gen
   gen -->|PersonaLLMPort| inf
   gen -->|response-generated| kafka
-  kafka -->|deliver| media
-  media -->|TTS| tts
-  media -->|HLS| cdn
+  kafka -->|response-generated| avatar
+  avatar -->|TTS| tts
+  avatar --> encoder
+  encoder -->|RTMP push| ingest
+  ingest -->|HLS| cdn
   cdn -->|playback| viewer
   api <-->|fanout| redis
-  media -.->|notify| redis
-  api -.->|idle · StoryFeedPort| community
+  idle -.->|StoryFeedPort| community
   viewer -->|superchat| wallet
   wallet -.->|DonationRankingPort| community
   viewer -->|pay| payments
@@ -55,9 +63,10 @@ flowchart LR
 
 | 단위 | 무엇 | 배포 | 왜 이 경계 |
 |---|---|---|---|
-| **aria 모놀리스** | contexts: identity·persona·community·chat·streaming·wallet | api / generation-worker / media-worker (같은 이미지) | 워커로 독립 스케일. wallet은 후원 핫패스라 여기 |
+| **aria 모놀리스** | contexts: identity·persona·community·chat·streaming·wallet | api / generation-worker / idle-worker (같은 이미지) | 워커로 독립 스케일. wallet은 후원 핫패스라 여기 |
+| **broadcaster** | 아바타 렌더 · TTS · 인코딩 | 별도 프로세스/머신 | **별도 repo.** 스트리머 PC 역할이라 aria 밖이다(inference와 같은 이유) |
 
-> **generation-worker는 실체가 있다**(C-4-1). 진입점 `aria/workers/generation.py`, 실행은 `uv run faststream run aria.workers.generation:app`. api와 같은 이미지에 진입점만 다르며, 같은 consumer group 안에서 복제본을 늘리는 것이 곧 수평 확장이다. **합성 루트가 둘**인 셈인데(`app.py`와 여기), 둘 다 common과 컨텍스트를 함께 아는 자리라 common 밖 최상위에 둔다. media-worker는 아직 없다.
+> **generation-worker는 실체가 있다**(C-4-1). 진입점 `aria/workers/generation.py`, 실행은 `uv run faststream run aria.workers.generation:app`. api와 같은 이미지에 진입점만 다르며, 같은 consumer group 안에서 복제본을 늘리는 것이 곧 수평 확장이다. **합성 루트가 둘**인 셈인데(`app.py`와 여기), 둘 다 common과 컨텍스트를 함께 아는 자리라 common 밖 최상위에 둔다. idle-worker도 실체가 있다(아래). **media-worker는 없어졌다** — 그 일은 브로드캐스터로 나갔다.
 >
 > **idle 워커가 셋째 진입점이다**(`aria/workers/idle.py`, 실행 `uv run python -m aria.workers.idle`). 무채팅이 지속되면 사연을 읽거나 자율발화한다(FR-IDLE). FastStream은 메시지가 와야 깨어나므로 generation-worker에 합치지 않았다 — idle은 정반대로 "아무 일도 없을 때" 도는 타이머다.
 >
@@ -125,9 +134,24 @@ flowchart LR
 
 payments→wallet은 **outbox 패턴**(결제확정 + outbox 로우 로컬 트랜잭션 → relay가 Kafka 발행 → wallet 멱등 소비). 상세: `docs/events.md`.
 
-## 실시간 송출 — 서버합성 HLS
+## 실시간 송출 — **브로드캐스터와 플랫폼을 가른다**
 
-미디어는 서버합성 HLS + CDN. media-worker가 TTS + 감정별 클립 + 자막을 ffmpeg로 muxing → HLS 세그먼트. 시청자 수가 CDN으로 이관(레거시 "100명 벽" 병목 제거). 응답 사이는 idle 아바타 루프. 채팅·제어는 WebSocket(+Redis pub/sub 백플레인).
+실제 스트리밍에는 역할이 둘이다. **브로드캐스터**(스트리머 PC)가 캡처·합성·인코딩해서 RTMP로 밀고, **플랫폼**(트위치·치지직)이 ingest → 패키징 → CDN으로 시청자에게 흘린다. 채팅은 그와 별개 시스템이다.
+
+aria는 **플랫폼**이다. AI 스트리머에게는 사람도 PC도 없으므로 브로드캐스터 역할을 대신할 것이 필요한데, **그것을 aria 안에 넣지 않고 밖으로 뺀다**.
+
+| | 하는 일 | 어디 |
+|---|---|---|
+| **broadcaster** | `response-generated` 구독 → TTS → 아바타 렌더 + 자막 합성 → 인코딩 → RTMP push | **별도 repo** (inference와 같은 지위) |
+| **aria (플랫폼)** | RTMP ingest → HLS 패키징 → CDN. `chat_room.hls_url` 제공. 채팅·후원·랭킹 | 이 repo |
+
+> **왜 갈랐나.** 이전 판은 "서버합성 HLS — media-worker가 TTS + 감정별 클립 + 자막을 ffmpeg로 muxing"이었다. 그런데 그건 **스트리머 PC가 할 일을 서버 안에 밀어 넣은 것**이라, 역할 경계가 뭉개져 실제 스트리밍 구조와 어긋났다. RTMP를 경계로 두면 브로드캐스터와 플랫폼이 각각 실제와 같은 일을 한다.
+
+> **얻는 것.** ① 고증 — 두 역할이 실제 구조 그대로 나뉜다. ② **교체 가능성** — 아바타를 정지 이미지로 하든 Live2D/VTS로 하든 **aria는 한 줄도 바뀌지 않는다**. 브로드캐스터를 갈아끼우는 일이다. ③ aria에서 ffmpeg가 사라진다. ④ 윈도우 GPU 박스(VTS·OBS)가 자연스럽게 브로드캐스터 자리에 놓인다.
+
+> **대가.** ① RTMP→HLS는 지연이 수 초~수십 초다. 다만 **채팅이 영상보다 빠른 것도 실제 스트리밍 그대로**라 이건 오히려 고증이다. ② VTS 기반 브로드캐스터는 디스플레이 달린 머신이 켜져 있어야 한다 — 그래서 1차 브로드캐스터는 headless(정지 이미지 + ffmpeg)로 두고, VTS는 그것을 교체하는 형태로 나중에 붙인다.
+
+시청자 수는 CDN으로 이관된다(레거시 "100명 벽" 병목 제거). 응답 사이는 브로드캐스터의 idle 루프가 채운다. 채팅·제어는 WebSocket(+Redis pub/sub 백플레인)으로 미디어와 **완전히 별개** 경로다 — 실제 플랫폼도 그렇다.
 
 ## 관측성 — 두 레이어
 
