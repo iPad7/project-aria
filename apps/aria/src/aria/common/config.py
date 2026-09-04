@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -68,6 +69,23 @@ class Settings(BaseSettings):
     jwt_secret: str = "dev-insecure-do-not-use-in-production-secret"
     jwt_algorithm: str = "HS256"
     jwt_ttl_seconds: int = 3600
+
+    @field_validator("jwt_secret")
+    @classmethod
+    def _secret_must_not_be_empty(cls, value: str) -> str:
+        """빈 문자열은 기본값을 덮어쓰고 **첫 로그인 때** 터진다.
+
+        `.env` 에 `ARIA_JWT_SECRET=` 를 빈 채로 두면 pydantic-settings 는 그것을
+        "설정된 값"으로 보아 안전한 기본값을 대체한다. 그러면 기동은 멀쩡히 되고
+        토큰 발급에서 `HMAC key must not be empty` 로 죽는다 — 설정 실수는
+        기동 시점에 드러나는 편이 낫다(폴백 LLM 이 키 없이 켜졌을 때와 같은 방침).
+        """
+        if not value.strip():
+            raise ValueError(
+                "ARIA_JWT_SECRET 가 비어 있습니다. 값을 주거나 줄을 지우세요"
+                "(지우면 개발용 기본값이 쓰입니다)."
+            )
+        return value
 
 
 settings = Settings()
