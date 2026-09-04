@@ -16,4 +16,4 @@ AI 페르소나 라이브 스트리밍 플랫폼 (모노레포: `apps/aria` 모�
 
 ## 확정 스택
 
-FastAPI · SQLModel+Alembic · Redis(state+pub/sub) · **Kafka+FastStream**(durable 이벤트) · ffmpeg→HLS · JWT · **vLLM**(서빙, 앱 밖) · OTel+SigNoz+Langfuse · Vite+React(별도 repo). payments=별도 서비스(outbox). Ollama·Redis Streams·Celery·Kafka대체 미사용. inference·llmops는 GPU라 별도 repo. 상세 `docs/architecture.md`.
+FastAPI · SQLModel+Alembic · Redis(state+pub/sub) · **Kafka+FastStream**(durable 이벤트) · **RTMP ingest→HLS**(플랫폼 쪽) · JWT · **vLLM**(서빙, 앱 밖) · OTel+SigNoz+Langfuse · Vite+React(별도 repo). payments=별도 서비스(outbox). Ollama·Redis Streams·Celery·Kafka대체 미사용. inference·llmops·**broadcaster**(아바타 렌더·TTS·인코딩)는 별도 repo — 앞의 둘은 GPU 때문이고, broadcaster는 **스트리머 PC 역할이라 aria 밖**이다. 상세 `docs/architecture.md`.

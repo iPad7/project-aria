@@ -22,12 +22,14 @@
 |---|---|---|---|---|---|
 | `aria.chat.response-requested` | chat api | `generation-workers` | room_id | msg_id, room_id, persona_id, source, prompt, requested_at | **구현됨** (C-4-1) |
 | `aria.chat.superchat-requested` | chat api (후원 수신) | `generation-workers` | room_id | 위와 같은 모양 (`source="superchat"`) | **구현됨** (C-4-1) |
-| `aria.streaming.response-generated` | generation-worker | media-workers | room_id | msg_id, room_id, persona_id, text, emotion, model_version, generated_at | 미구현 — media-worker가 없다 |
+| `aria.streaming.response-generated` | generation-worker | **broadcaster** (별도 repo) | room_id | msg_id, room_id, persona_id, text, emotion, model_version, generated_at | 미구현 |
 | `<topic>.dlq` | generation-worker | (사람) | 원본과 같음 | original_topic, failed_at, error, original | **구현됨** (C-4-2) |
 
 > **두 요청 토픽의 페이로드는 같은 모양이다.** 원래 표는 `selected_comment`/`donor`처럼 서로 다른 필드를 적어 두었지만, 워커에게 필요한 것은 결국 "어느 방의 어느 페르소나가 무엇에 답하는가"뿐이라 하나의 `GenerationRequest`로 합쳤다. 후원 금액·메시지는 문구로 풀려 `prompt`에 들어간다. (`selected_comment`가 사라진 또 다른 이유: 선별(FR-GEN-1·2)이 아직 없어 실제로 실리는 것은 사용자가 보낸 원문이다.)
 
-> **응답은 Kafka로 돌아오지 않는다.** media-worker가 생기기 전까지 워커는 생성한 답변을 곧바로 **Redis pub/sub 방 채널**로 발행하고, api 프로세스의 WS 연결들이 그것을 받는다. 팬아웃이 이미 프로세스 경계를 넘고 있었기 때문에 클라이언트는 아무것도 바뀌지 않았다.
+> **지금 응답은 Kafka로 돌아오지 않는다.** 브로드캐스터가 생기기 전까지 generation-worker는 생성한 답변을 곧바로 **Redis pub/sub 방 채널**로 발행하고, api 프로세스의 WS 연결들이 그것을 받는다. 팬아웃이 이미 프로세스 경계를 넘고 있었기 때문에 클라이언트는 아무것도 바뀌지 않았다.
+>
+> **`response-generated`의 소비자는 aria 밖이다.** 브로드캐스터는 별도 repo이고, Kafka가 그 경계다 — 컨텍스트 간 경유를 common으로 하듯, repo 간 경유는 토픽으로 한다.
 
 > 미디어 합성 완료 후 시청자 알림(타임라인 splice)은 **Redis pub/sub**(아래). Kafka 토픽 아님.
 
@@ -49,7 +51,7 @@
 | 채널 | publisher | 용도 |
 |---|---|---|
 | `chat:room:{room_id}` | chat api/worker | 채팅·응답·**후원(superchat)** 메시지 전 인스턴스 팬아웃 |
-| `stream:room:{room_id}` | media-worker | 미디어 세그먼트 알림(타임라인 splice), 후원 **영상 오버레이**, 큐 상태 |
+| `stream:room:{room_id}` | broadcaster | 방송 상태 알림(송출 시작·중단), 후원 **영상 오버레이**, 큐 상태 |
 
 프레임 종류는 `type` 필드로 구분한다: `message` · `reply` · `superchat`. `reply`는 `source`(`chat`/`superchat`/`story`/`idle`)를 함께 실어, 클라이언트가 감사 응답과 일반 응답을 구분할 수 있게 한다.
 
