@@ -107,6 +107,16 @@ class SqlModelStoryRepository:
         self._session.add(row)
         self._session.commit()
 
+    def release(self, story_id: UUID) -> None:
+        row = self._session.get(StoryTable, story_id)
+        # **reading일 때만 되돌린다.** 이미 done인 사연을 대기열에 다시 넣으면 같은
+        # 사연을 두 번 읽게 된다 — 낭독이 끝난 뒤 뒤늦게 실패 처리가 도착하는 경우다.
+        if row is None or row.status != StoryStatus.READING.value:
+            return
+        row.status = StoryStatus.PENDING.value
+        self._session.add(row)
+        self._session.commit()
+
 
 class SqlModelLikeRepository:
     """LikeRepository의 SQLModel 구현.

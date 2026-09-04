@@ -45,3 +45,6 @@ class CommunityStoryFeed:
 
     async def mark_done(self, story_id: UUID) -> None:
         await anyio.to_thread.run_sync(self._stories.mark_done, story_id)
+
+    async def release(self, story_id: UUID) -> None:
+        await anyio.to_thread.run_sync(self._stories.release, story_id)

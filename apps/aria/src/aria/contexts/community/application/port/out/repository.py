@@ -46,3 +46,11 @@ class StoryRepository(Protocol):
     def mark_done(self, story_id: UUID) -> None:
         """reading → done. 이미 done이거나 없으면 아무 일도 하지 않는다(멱등)."""
         ...
+
+    def release(self, story_id: UUID) -> None:
+        """선점 취소(reading → pending). 낭독 실패 시 대기열로 되돌린다.
+
+        `reading`일 때만 되돌린다 — 이미 `done`인 사연을 대기열에 다시 넣으면 같은
+        사연을 두 번 읽는다.
+        """
+        ...
