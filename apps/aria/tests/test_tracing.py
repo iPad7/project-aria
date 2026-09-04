@@ -16,7 +16,7 @@ import pytest
 from fakeredis import FakeAsyncRedis, FakeServer
 from generation_harness import StubProfiles
 
-from aria.common.config import settings
+from aria.common.config import Settings, settings
 from aria.common.langfuse_tracing import LangfuseTracing, build_tracing
 from aria.common.persona_profile import PersonaProfile
 from aria.common.tracing import NoOpTracing
@@ -123,9 +123,19 @@ def _service(
 # --- 기본은 꺼져 있다 --------------------------------------------------------
 
 
-def test_tracing_is_off_by_default() -> None:
+def test_tracing_is_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     # 키 없는 로컬·CI가 여기로 돈다. 계측 코드가 `if enabled:`로 도배되지 않도록
     # 끄는 방법을 분기가 아니라 구현 교체로 둔다.
+    #
+    # 설정을 명시적으로 고정한다 — 개발자의 .env 에 관측이 켜져 있으면 이 테스트가
+    # 주변 환경 때문에 깨진다(실제로 그렇게 깨졌다).
+    # `Settings()` 를 새로 만들면 .env 를 다시 읽으므로 소용없다 — 선언된 기본값을 쓴다.
+    monkeypatch.setattr(
+        settings,
+        "langfuse_enabled",
+        Settings.model_fields["langfuse_enabled"].default,
+    )
+
     assert isinstance(build_tracing(), NoOpTracing)
 
 

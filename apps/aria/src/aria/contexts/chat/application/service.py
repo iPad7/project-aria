@@ -1,8 +1,12 @@
 """chat 조율 유스케이스 — 요청 경로 (async).
 
 C-4-1에서 생성이 워커로 빠지면서 이 서비스가 하는 일이 짧아졌다: 활동을 기록하고,
-방에 **표시할 것을 발행하고**, 생성을 큐에 맡긴다. 즉시 끝난다. 실제 생성과 우선순위
-조율은 `generation.py`의 `ResponseGenerationService`(워커)가 한다.
+방에 **표시할 것을 발행하고**, 즉시 끝난다.
+
+**채팅과 후원의 경로가 다르다.** 후원은 곧바로 생성을 요청한다 — 돈을 냈으니 반드시
+답해야 하고, 우선순위도 가장 높다. 반면 일반 채팅은 **후보로 쌓기만** 하고, 진행
+워커가 틱마다 그중 하나를 골라 답한다(FR-GEN-1·2). 실제 생성과 우선순위 조율은
+`generation.py`의 `ResponseGenerationService`(워커)가 한다.
 
 **표시 발행이 여기 있는 이유.** 전에는 WS 라우터가 메시지 프레임을 발행했다. 그 결과
 HTTP로 보낸 메시지는 방에 나타나지 않았고(전송마다 동작이 갈렸다), 후원에서는 더
@@ -22,17 +26,19 @@ from aria.common.superchat import SuperchatPort
 from aria.contexts.chat.application.generation import GenerationRequestPublisher
 from aria.contexts.chat.application.port.out.activity import ActivityTracker
 from aria.contexts.chat.application.port.out.broadcast import RoomBroadcaster
+from aria.contexts.chat.application.port.out.candidates import CandidateBuffer
 from aria.contexts.chat.domain.message import ChatMessage
 from aria.contexts.chat.domain.source import ChatSource
+from aria.contexts.chat.domain.topic import Candidate
 
 
 @dataclass(frozen=True)
 class MessageOutcome:
     """메시지 접수 결과.
 
-    응답은 여기 없다. 생성이 비동기라 요청이 끝나는 시점에는 아직 없고, 완성되면
-    방 채널로 흘러 구독자 모두에게 간다. `accepted`만 남은 게 초라해 보이지만
-    선별(FR-GEN-1·2)이 붙으면 거절이 생기는 자리다.
+    응답은 여기 없다. 메시지는 **후보로 쌓이고**, 진행 워커가 틱마다 그중 하나를
+    골라 답한다(FR-GEN-1·2). 그래서 `accepted`는 "받았다"이지 "답한다"가 아니다 —
+    실제 방송에서도 스트리머가 모든 댓글에 답하지는 않는다.
     """
 
     accepted: bool
@@ -69,11 +75,13 @@ class ChatOrchestrationService:
         broadcaster: RoomBroadcaster,
         generation: GenerationRequestPublisher,
         superchat: SuperchatPort,
+        candidates: CandidateBuffer,
     ) -> None:
         self._activity = activity
         self._broadcaster = broadcaster
         self._generation = generation
         self._superchat = superchat
+        self._candidates = candidates
 
     async def handle_user_message(
         self, room_id: UUID, persona_id: UUID, author_id: UUID, text: str
@@ -91,8 +99,15 @@ class ChatOrchestrationService:
                 "text": message.text,
             },
         )
-        await self._generation.request(
-            room_id, persona_id, ChatSource.CHAT, message.text
+        # **생성 요청을 여기서 내지 않는다.** 후보로 쌓아 두면 진행 워커가 틱마다
+        # 그중 하나를 골라 답한다(FR-GEN-1·2).
+        #
+        # 전에는 메시지마다 요청이 나가고 슬롯을 못 잡은 것은 조용히 버려졌다 —
+        # 즉 "선별"이 Redis 락 경쟁이었다. 초당 수십 개가 들어오는 방송에서는
+        # 아무 의미가 없다.
+        await self._candidates.add(
+            room_id,
+            Candidate(message_id=message.id, author_id=author_id, text=message.text),
         )
         return MessageOutcome(accepted=True)
 

@@ -272,6 +272,7 @@ LIMIT ?
 - **SQLModel 겸용**(Lite): 도메인 복잡도가 커지면 국소적으로 엔티티 분리.
 - **Alembic** 마이그레이션(Django migration 대체).
 - **휘발 상태는 Redis**: `StreamSession`·요청/응답 큐·토픽 스레드는 DB에 넣지 않음(수평확장). 레거시 인메모리/클래스변수의 Redis 외부화.
+  - 응답 후보 버퍼(`chat:candidates:{room_id}`) — 방별 리스트, **최근 50개**, **TTL 5분**. 오래된 채팅은 후보로서 가치가 없고, TTL이 없으면 끝난 방송의 잔재가 남는다. 꺼낼 때 비운다(읽기가 아니라 **소비**) — 고르고 나면 나머지는 버리기 때문이다.
 - **레거시 정리**: `chat.Story` vs `influencers.Story` 중복 → `community.story` 단일. `StreamerTTSSettings` vs `InfluencerTTSSettings` → `persona.tts_settings` 단일.
 
 ## 미확정

@@ -68,12 +68,21 @@ class GenerationRequest:
     source: ChatSource
     prompt: str
     requested_at: datetime
+    # 선별 근거(FR-GEN-2). 채팅 응답일 때만 채워지고, 트레이스에 실려 "후보 몇 개
+    # 중 왜 저걸 골랐나"에 답한다. 없어도 생성은 그대로 돈다.
+    selection: dict[str, Any] | None = None
 
     @classmethod
     def create(
-        cls, room_id: UUID, persona_id: UUID, source: ChatSource, prompt: str
+        cls,
+        room_id: UUID,
+        persona_id: UUID,
+        source: ChatSource,
+        prompt: str,
+        selection: dict[str, Any] | None = None,
     ) -> GenerationRequest:
         return cls(
+            selection=selection,
             # 중복 소비를 흡수하는 멱등키. 워커가 `ProcessedRegistry`로 이걸 claim한다.
             msg_id=new_id(),
             room_id=room_id,
@@ -92,6 +101,7 @@ class GenerationRequest:
             "source": self.source.value,
             "prompt": self.prompt,
             "requested_at": self.requested_at.isoformat(),
+            "selection": self.selection,
         }
 
     @classmethod
@@ -109,6 +119,8 @@ class GenerationRequest:
             source=ChatSource(payload["source"]),
             prompt=payload["prompt"],
             requested_at=datetime.fromisoformat(payload["requested_at"]),
+            # C-4-2 이전 페이로드에는 없다 — 없으면 그냥 근거가 없는 것이다.
+            selection=payload.get("selection"),
         )
 
     def to_event(self) -> Event:
@@ -128,9 +140,16 @@ class GenerationRequestPublisher:
         self._events = events
 
     async def request(
-        self, room_id: UUID, persona_id: UUID, source: ChatSource, prompt: str
+        self,
+        room_id: UUID,
+        persona_id: UUID,
+        source: ChatSource,
+        prompt: str,
+        selection: dict[str, Any] | None = None,
     ) -> GenerationRequest:
-        request = GenerationRequest.create(room_id, persona_id, source, prompt)
+        request = GenerationRequest.create(
+            room_id, persona_id, source, prompt, selection
+        )
         await self._events.publish(request.to_event())
         return request
 
@@ -163,6 +182,8 @@ class ResponseGenerationService:
                 "persona_id": str(request.persona_id),
                 "source": request.source.value,
                 "msg_id": str(request.msg_id),
+                # 선별 근거. 채팅 응답일 때만 있다.
+                **(request.selection or {}),
             },
         ) as trace:
             await self._handle(request, trace)

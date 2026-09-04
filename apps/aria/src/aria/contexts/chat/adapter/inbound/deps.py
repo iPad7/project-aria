@@ -29,6 +29,7 @@ from aria.contexts.chat.adapter.outbound.persistence.repository import (
 )
 from aria.contexts.chat.adapter.outbound.redis.activity import RedisActivityTracker
 from aria.contexts.chat.adapter.outbound.redis.broadcast import RedisRoomBroadcaster
+from aria.contexts.chat.adapter.outbound.redis.candidates import RedisCandidateBuffer
 from aria.contexts.chat.application.generation import GenerationRequestPublisher
 from aria.contexts.chat.application.port.out.activity import ActivityTracker
 from aria.contexts.chat.application.port.out.broadcast import RoomBroadcaster
@@ -71,6 +72,7 @@ def get_chat_service(
         broadcaster=RedisRoomBroadcaster(redis),
         generation=GenerationRequestPublisher(events),
         superchat=superchat,
+        candidates=RedisCandidateBuffer(redis),
     )
 
 

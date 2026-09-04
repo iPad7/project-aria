@@ -70,7 +70,9 @@ flowchart LR
 
 > **generation-worker는 실체가 있다**(C-4-1). 진입점 `aria/workers/generation.py`, 실행은 `uv run faststream run aria.workers.generation:app`. api와 같은 이미지에 진입점만 다르며, 같은 consumer group 안에서 복제본을 늘리는 것이 곧 수평 확장이다. **합성 루트가 둘**인 셈인데(`app.py`와 여기), 둘 다 common과 컨텍스트를 함께 아는 자리라 common 밖 최상위에 둔다. idle-worker도 실체가 있다(아래). **media-worker는 없어졌다** — 그 일은 브로드캐스터로 나갔다.
 >
-> **idle 워커가 셋째 진입점이다**(`aria/workers/idle.py`, 실행 `uv run python -m aria.workers.idle`). 무채팅이 지속되면 사연을 읽거나 자율발화한다(FR-IDLE). FastStream은 메시지가 와야 깨어나므로 generation-worker에 합치지 않았다 — idle은 정반대로 "아무 일도 없을 때" 도는 타이머다.
+> **진행(progress) 워커가 셋째 진입점이다**(`aria/workers/idle.py`, 실행 `uv run python -m aria.workers.idle`). 페르소나가 **지금 무슨 말을 할지** 한 곳에서 정한다 — 선별된 댓글에 답하거나(FR-GEN-1·2), 사연을 읽거나, 자율발화한다(FR-IDLE).
+>
+> **셋을 한 서비스에 둔 이유: 경쟁 관계다.** 한 방에서 동시에 하나의 응답만 만들 수 있으므로 어차피 한 곳에서 골라야 한다. 나누면 둘이 각자 발행하고 코디네이터가 하나를 버리는 낭비가 생기는데, 그게 선별로 없애려던 바로 그 문제다. 우선순위는 **댓글 > 사연 > 자율발화**이고 `ChatSource` 값(CHAT=2 > STORY=IDLE=1)과 같은 순서다. FastStream은 메시지가 와야 깨어나므로 generation-worker에 합치지 않았다 — idle은 정반대로 "아무 일도 없을 때" 도는 타이머다.
 >
 > **이 워커는 DB를 안다**(방 목록·사연). "워커는 DB를 모른다"는 generation-worker의 규칙이고, idle 워커는 생성을 하지 않고 **요청만 발행**하므로 그 경계와 충돌하지 않는다.
 
