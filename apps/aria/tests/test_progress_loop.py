@@ -22,6 +22,9 @@ from aria.contexts.chat.adapter.outbound.clustering.lexical import (
     LexicalTopicClusterer,
 )
 from aria.contexts.chat.adapter.outbound.redis.activity import RedisActivityTracker
+from aria.contexts.chat.adapter.outbound.redis.coordinator import (
+    RedisResponseCoordinator,
+)
 from aria.contexts.chat.adapter.outbound.redis.idle_lock import RedisIdleLock
 from aria.contexts.chat.application.generation import GenerationRequestPublisher
 from aria.contexts.chat.application.port.out.candidates import CandidateBuffer
@@ -101,6 +104,7 @@ def _service(
         generation=GenerationRequestPublisher(bus or RecordingEventBus()),
         candidates=candidates or _MemoryCandidates(),
         clusterer=LexicalTopicClusterer(),
+        coordinator=RedisResponseCoordinator(redis),
         threshold_seconds=_THRESHOLD,
     )
 
@@ -376,6 +380,7 @@ async def test_one_failing_room_does_not_stop_the_others(
         generation=GenerationRequestPublisher(events),
         candidates=_MemoryCandidates(),
         clusterer=LexicalTopicClusterer(),
+        coordinator=RedisResponseCoordinator(redis),
         threshold_seconds=_THRESHOLD,
     )
 
@@ -498,3 +503,43 @@ async def test_locked_room_does_not_consume_candidates(
     )
     # 소비되지 않았으므로 후보가 그대로 남아 있다 — 락을 놓으면 다음 틱이 답한다.
     assert len(await candidates.take_all(room)) == 1
+
+
+# --- 헛된 소비를 막는가 (사후 발견 · 이번 단위가 남겼던 결함) -----------------
+
+
+async def test_busy_room_does_not_consume_candidates(redis: FakeAsyncRedis) -> None:
+    """생성 워커가 슬롯을 못 잡으면 그 배치의 댓글이 답도 없이 사라졌다.
+
+    사연에는 같은 문제를 알고 `release` 를 뒀는데 후보에는 두지 않았다. 후보를 꺼내는
+    것도 되돌릴 수 없는 소비이므로, **꺼내기 전에** 지금 누가 응답 중인지 묻는다.
+    """
+    room = uuid4()
+    coordinator = RedisResponseCoordinator(redis)
+    await coordinator.try_acquire(room, ChatSource.SUPERCHAT)  # 후원이 응답 중
+    candidates = _MemoryCandidates(_candidate("고백하는 게 맞을까요?"))
+
+    progress = await _service(redis, _FakeStories(), candidates=candidates).advance(
+        room, uuid4()
+    )
+
+    assert progress is None
+    # 후보가 그대로 남아 있다 — 슬롯이 비면 다음 틱이 답한다.
+    assert len(await candidates.take_all(room)) == 1
+
+
+async def test_busy_room_does_not_consume_a_story(redis: FakeAsyncRedis) -> None:
+    # 같은 이유로 사연도 claim 하지 않는다.
+    room = uuid4()
+    await RedisResponseCoordinator(redis).try_acquire(room, ChatSource.SUPERCHAT)
+    stories = _FakeStories(_story())
+
+    assert await _service(redis, stories).advance(room, uuid4()) is None
+    assert stories.claims == 0
+
+
+async def test_free_room_proceeds(redis: FakeAsyncRedis) -> None:
+    # 대조군 — 아무도 응답 중이 아니면 그대로 진행한다.
+    progress = await _service(redis, _FakeStories(_story())).advance(uuid4(), uuid4())
+
+    assert progress is not None

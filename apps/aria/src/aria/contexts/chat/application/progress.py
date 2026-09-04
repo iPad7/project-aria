@@ -31,6 +31,7 @@ from aria.contexts.chat.application.generation import GenerationRequestPublisher
 from aria.contexts.chat.application.port.out.activity import ActivityTracker
 from aria.contexts.chat.application.port.out.candidates import CandidateBuffer
 from aria.contexts.chat.application.port.out.clustering import TopicClusterer
+from aria.contexts.chat.application.port.out.coordinator import ResponseCoordinator
 from aria.contexts.chat.application.port.out.idle_lock import IdleLock
 from aria.contexts.chat.domain.source import ChatSource
 from aria.contexts.chat.domain.topic import Scored, select_best
@@ -81,6 +82,7 @@ class ProgressService:
         generation: GenerationRequestPublisher,
         candidates: CandidateBuffer,
         clusterer: TopicClusterer,
+        coordinator: ResponseCoordinator,
         *,
         threshold_seconds: float,
     ) -> None:
@@ -90,6 +92,7 @@ class ProgressService:
         self._generation = generation
         self._candidates = candidates
         self._clusterer = clusterer
+        self._coordinator = coordinator
         self._threshold = threshold_seconds
 
     async def advance(self, room_id: UUID, persona_id: UUID) -> Progress | None:
@@ -98,8 +101,18 @@ class ProgressService:
         **락이 가장 앞이다.** 후보를 꺼내는 것도 사연 claim도 **소비**라 되돌릴 수
         없다 — 코디네이터가 나중에 걸러 주는 것으로는 늦다.
         """
+        # **소비하기 전에 두 문을 지난다.**
+        #
+        # ① 다른 워커가 이 방을 맡았는가(락) ② 지금 누가 응답을 만들고 있는가(슬롯).
+        # 후보를 꺼내는 것도 사연 claim 도 되돌릴 수 없는 소비라, 꺼내 놓고 생성
+        # 워커가 슬롯을 못 잡으면 그 배치의 댓글이 답도 없이 사라진다.
+        #
+        # 슬롯은 **묻기만 하고 잡지 않는다** — 잡는 것은 생성 워커의 일이다. 그래서
+        # 확인과 생성 사이에 선점당할 수는 있지만, 그건 더 높은 우선순위가 대신
+        # 답했다는 뜻이라 문제가 아니다.
+        if await self._coordinator.is_busy(room_id):
+            return None
         if not await self._lock.acquire(room_id):
-            # 다른 워커가 이 방을 맡았다. 아무것도 소비하기 전에 물러난다.
             return None
 
         story: PendingStory | None = None

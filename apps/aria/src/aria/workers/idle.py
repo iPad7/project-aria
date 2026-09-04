@@ -35,6 +35,9 @@ from aria.contexts.chat.adapter.outbound.persistence.repository import (
 )
 from aria.contexts.chat.adapter.outbound.redis.activity import RedisActivityTracker
 from aria.contexts.chat.adapter.outbound.redis.candidates import RedisCandidateBuffer
+from aria.contexts.chat.adapter.outbound.redis.coordinator import (
+    RedisResponseCoordinator,
+)
 from aria.contexts.chat.adapter.outbound.redis.idle_lock import RedisIdleLock
 from aria.contexts.chat.application.generation import GenerationRequestPublisher
 from aria.contexts.chat.application.progress import ProgressService
@@ -97,6 +100,7 @@ async def run() -> None:
             generation=GenerationRequestPublisher(KafkaEventBus(broker)),
             candidates=RedisCandidateBuffer(redis),
             clusterer=LexicalTopicClusterer(),
+            coordinator=RedisResponseCoordinator(redis),
             threshold_seconds=settings.idle_threshold_seconds,
         )
         logger.info(
