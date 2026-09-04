@@ -27,6 +27,9 @@ known-first-party = ["aria", "payments"]
 [tool.pytest.ini_options]
 addopts = "--import-mode=importlib"
 testpaths = ["apps/aria/tests", "apps/payments/tests"]
+# importlib 모드는 sys.path를 건드리지 않으므로, 테스트끼리 공유하는 하네스를
+# 이름으로 import하려면 경로를 명시해야 한다(예: tests/generation_harness.py).
+pythonpath = ["apps/aria/tests"]
 asyncio_mode = "auto"
 
 [dependency-groups]

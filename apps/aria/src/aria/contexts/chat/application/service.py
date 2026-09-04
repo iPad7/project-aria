@@ -1,11 +1,16 @@
-"""chat 조율 유스케이스 (async).
+"""chat 조율 유스케이스 — 요청 경로 (async).
 
-레거시가 ActivityManager+ResponseManager+Responder로 흩어 두었던 흐름을 하나의
-조율 루프로 모은다: 활동 기록 → 응답 슬롯 확보(우선순위) → 생성(앱/추론 경계) → 슬롯 반납.
-LLM 호출은 PersonaLLMPort 뒤에 있어 app은 sLLM인지 OpenAI인지 모른다.
+C-4-1에서 생성이 워커로 빠지면서 이 서비스가 하는 일이 짧아졌다: 활동을 기록하고,
+방에 **표시할 것을 발행하고**, 생성을 큐에 맡긴다. 즉시 끝난다. 실제 생성과 우선순위
+조율은 `generation.py`의 `ResponseGenerationService`(워커)가 한다.
 
-후원(FR-PAY-3)은 크레딧 차감을 `SuperchatPort`로 wallet에 맡기고, 감사 응답(FR-GEN-6)만
-여기서 조율한다 — 컨텍스트끼리 직접 부르지 않으므로 계약이 common에 있다.
+**표시 발행이 여기 있는 이유.** 전에는 WS 라우터가 메시지 프레임을 발행했다. 그 결과
+HTTP로 보낸 메시지는 방에 나타나지 않았고(전송마다 동작이 갈렸다), 후원에서는 더
+나빠질 수 있었다 — 워커가 감사 응답을 먼저 발행해 "고맙습니다"가 후원 표시보다 앞서
+나가는 순서 뒤집힘이 가능했다. 발행을 유스케이스로 끌어올려 순서를 한 곳에서 못박는다.
+
+후원(FR-PAY-3)은 크레딧 차감을 `SuperchatPort`로 wallet에 맡긴다 — 컨텍스트끼리 직접
+부르지 않으므로 계약이 common에 있다.
 """
 
 from __future__ import annotations
@@ -14,39 +19,36 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from aria.common.superchat import SuperchatPort
+from aria.contexts.chat.application.generation import GenerationRequestPublisher
 from aria.contexts.chat.application.port.out.activity import ActivityTracker
-from aria.contexts.chat.application.port.out.coordinator import (
-    ResponseCoordinator,
-    ResponseSlot,
-)
-from aria.contexts.chat.application.port.out.llm import Message, PersonaLLMPort
+from aria.contexts.chat.application.port.out.broadcast import RoomBroadcaster
 from aria.contexts.chat.domain.message import ChatMessage
 from aria.contexts.chat.domain.source import ChatSource
 
 
 @dataclass(frozen=True)
-class ChatReply:
-    text: str
-    model_version: str | None  # opaque telemetry; 로깅만, 분기 금지
-
-
-@dataclass(frozen=True)
 class MessageOutcome:
+    """메시지 접수 결과.
+
+    응답은 여기 없다. 생성이 비동기라 요청이 끝나는 시점에는 아직 없고, 완성되면
+    방 채널로 흘러 구독자 모두에게 간다. `accepted`만 남은 게 초라해 보이지만
+    선별(FR-GEN-1·2)이 붙으면 거절이 생기는 자리다.
+    """
+
     accepted: bool
-    reply: ChatReply | None  # AI가 더 높은/같은 우선순위로 바쁘면 None
 
 
 @dataclass(frozen=True)
 class SuperchatOutcome:
-    """후원 결과.
+    """후원 결과 — 차감은 동기라 즉시 확정된 값을 돌려준다.
 
-    `reply`가 None이어도 **후원은 성립한 것이다** — 차감·기록은 이미 끝났고 감사 응답만
-    생기지 않았다는 뜻이다. 차감이 실패했다면 애초에 예외로 나가고 여기 오지 않는다.
+    감사 응답은 여기 없다. 슬롯을 못 잡아 응답이 아예 안 생길 수도 있는데, 그래도
+    **후원은 성립한 것이다** — 차감·기록은 이미 끝났다. 차감이 실패했다면 애초에
+    예외로 나가고 여기 오지 않는다.
     """
 
     donation_id: UUID
     balance_after: int
-    reply: ChatReply | None
 
 
 def _thanks_prompt(amount: int, message: str | None) -> str:
@@ -64,13 +66,13 @@ class ChatOrchestrationService:
     def __init__(
         self,
         activity: ActivityTracker,
-        coordinator: ResponseCoordinator,
-        llm: PersonaLLMPort,
+        broadcaster: RoomBroadcaster,
+        generation: GenerationRequestPublisher,
         superchat: SuperchatPort,
     ) -> None:
         self._activity = activity
-        self._coordinator = coordinator
-        self._llm = llm
+        self._broadcaster = broadcaster
+        self._generation = generation
         self._superchat = superchat
 
     async def handle_user_message(
@@ -80,13 +82,19 @@ class ChatOrchestrationService:
         message = ChatMessage(room_id=room_id, author_id=author_id, text=text)
         await self._activity.touch(room_id)
 
-        slot = await self._coordinator.try_acquire(room_id, ChatSource.CHAT)
-        if slot is None:
-            # 메시지는 받되 지금은 응답하지 않는다(더 높은/같은 소스가 응답 중).
-            return MessageOutcome(accepted=True, reply=None)
-
-        reply = await self._generate(room_id, persona_id, message.text, slot)
-        return MessageOutcome(accepted=True, reply=reply)
+        await self._broadcaster.publish(
+            room_id,
+            {
+                "type": "message",
+                "room_id": str(room_id),
+                "author_id": str(author_id),
+                "text": message.text,
+            },
+        )
+        await self._generation.request(
+            room_id, persona_id, ChatSource.CHAT, message.text
+        )
+        return MessageOutcome(accepted=True)
 
     async def handle_superchat(
         self,
@@ -98,12 +106,13 @@ class ChatOrchestrationService:
         message: str | None = None,
         idempotency_key: str | None = None,
     ) -> SuperchatOutcome:
-        """후원을 받고 감사 응답을 만든다.
+        """후원을 받고 감사 응답을 예약한다.
 
-        **순서가 계약이다.** 차감이 먼저다 — 실패하면 `InsufficientCreditError`가 그대로
-        올라가고 방송에는 아무 것도 나가지 않는다. 차감이 성공한 뒤에는 응답 슬롯을 못
-        잡아도 후원 자체는 성립한다. 돈을 받아 두고 표시를 못 하는 일이 없도록, 후원
-        표시는 이 결과를 받는 어댑터가 `reply`와 무관하게 발행한다.
+        **순서가 계약이다**(`docs/events.md`). ① 차감이 먼저다 — 실패하면
+        `InsufficientCreditError`가 그대로 올라가고 방송에는 아무 것도 나가지 않는다.
+        ② 차감이 성공하면 후원 표시를 **감사 응답과 무관하게 항상** 발행한다. ③ 마지막에
+        생성을 큐에 맡긴다. 셋을 이 순서로 여기에 모아 둬야 후원 표시보다 감사 응답이
+        먼저 나가는 뒤집힘이 생기지 않는다.
         """
         receipt = await self._superchat.charge(
             donor_id,
@@ -115,35 +124,21 @@ class ChatOrchestrationService:
         )
         await self._activity.touch(room_id)
 
-        slot = await self._coordinator.try_acquire(room_id, ChatSource.SUPERCHAT)
-        reply = (
-            None
-            if slot is None
-            else await self._generate(
-                room_id, persona_id, _thanks_prompt(amount, message), slot
-            )
+        await self._broadcaster.publish(
+            room_id,
+            {
+                "type": "superchat",
+                "room_id": str(room_id),
+                "persona_id": str(persona_id),
+                "donor_id": str(donor_id),
+                "donation_id": str(receipt.donation_id),
+                "amount": amount,
+                "message": message,
+            },
+        )
+        await self._generation.request(
+            room_id, persona_id, ChatSource.SUPERCHAT, _thanks_prompt(amount, message)
         )
         return SuperchatOutcome(
-            donation_id=receipt.donation_id,
-            balance_after=receipt.balance_after,
-            reply=reply,
+            donation_id=receipt.donation_id, balance_after=receipt.balance_after
         )
-
-    async def _generate(
-        self, room_id: UUID, persona_id: UUID, prompt: str, slot: ResponseSlot
-    ) -> ChatReply | None:
-        """슬롯을 쥔 채 응답을 만든다. 그 사이 선점당했으면 결과를 버린다.
-
-        생성은 외부 호출이라 중간에 취소할 수 없다. 그래서 취소 대신 **내보내기 직전에
-        아직 내 슬롯인지 확인**한다 — 이게 없으면 밀려난 응답이 그대로 발행돼 우선순위가
-        무의미해진다.
-        """
-        try:
-            result = await self._llm.generate(
-                str(persona_id), [Message(role="user", content=prompt)]
-            )
-            if not await self._coordinator.still_holds(room_id, slot):
-                return None  # 선점당했다 — 만든 응답을 버린다
-            return ChatReply(text=result.text, model_version=result.model_version)
-        finally:
-            await self._coordinator.release(room_id, slot)

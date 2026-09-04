@@ -22,22 +22,20 @@ class PostSuperchatRequest(SchemaBase):
     idempotency_key: str | None = Field(default=None, min_length=1, max_length=64)
 
 
-class ReplyView(SchemaBase):
-    text: str
-    model_version: str | None
-
-
 class MessageOutcomeResponse(SchemaBase):
+    """접수 결과. 응답(reply)은 여기 없다 — 방 채널로 흐른다(C-4-1)."""
+
     accepted: bool
-    reply: ReplyView | None  # AI가 바쁘면 null (메시지는 accepted)
 
 
 class SuperchatOutcomeResponse(SchemaBase):
-    """후원 결과. `reply`가 null이어도 후원은 성립했다(차감·기록 완료)."""
+    """후원 결과. 차감은 동기라 즉시 확정된다.
+
+    감사 응답은 여기 없다. 응답이 아예 안 생겨도 후원은 성립한 것이다(차감·기록 완료).
+    """
 
     donation_id: UUID
     balance_after: int
-    reply: ReplyView | None
 
 
 class RoomStateResponse(SchemaBase):

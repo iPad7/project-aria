@@ -2,7 +2,7 @@
 
 가짜 PersonaLLMPort 구현을 주입해 네트워크 없이 검증한다 — 주가 성공하면 폴백을
 건드리지 않고, 주가 실패하면 폴백 결과를 돌려주며, 둘 다 실패하면 폴백의 예외가
-올라오는지. 아래쪽은 _build_llm()이 config에 따라 실제로 합성하는지(그리고 키 없이
+올라오는지. 아래쪽은 build_llm()이 config에 따라 실제로 합성하는지(그리고 키 없이
 폴백을 켜면 기동을 거부하는지) 본다.
 """
 
@@ -11,7 +11,7 @@ import logging
 import pytest
 
 from aria.common.config import settings
-from aria.contexts.chat.adapter.inbound.deps import _build_llm
+from aria.contexts.chat.adapter.outbound.inference.factory import build_llm
 from aria.contexts.chat.adapter.outbound.inference.fallback import FallbackPersonaLLM
 from aria.contexts.chat.adapter.outbound.inference.stub import StubPersonaLLM
 from aria.contexts.chat.application.port.out.llm import (
@@ -102,7 +102,7 @@ async def test_arbitrary_exception_triggers_fallback_and_is_logged(
     assert "예상 못 한 버그" in caplog.text  # 스택이 남는다(exc_info=True)
 
 
-# --- 합성 배선 (_build_llm) ---------------------------------------------------
+# --- 합성 배선 (build_llm) ---------------------------------------------------
 
 
 def test_build_llm_without_fallback_returns_primary_unwrapped(
@@ -113,7 +113,7 @@ def test_build_llm_without_fallback_returns_primary_unwrapped(
     monkeypatch.setattr(settings, "llm_backend", "stub")
     monkeypatch.setattr(settings, "llm_fallback_enabled", False)
 
-    assert isinstance(_build_llm(), StubPersonaLLM)
+    assert isinstance(build_llm(), StubPersonaLLM)
 
 
 def test_build_llm_with_fallback_composes(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -121,7 +121,7 @@ def test_build_llm_with_fallback_composes(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(settings, "llm_fallback_enabled", True)
     monkeypatch.setattr(settings, "openai_api_key", "sk-test")
 
-    assert isinstance(_build_llm(), FallbackPersonaLLM)
+    assert isinstance(build_llm(), FallbackPersonaLLM)
 
 
 def test_build_llm_refuses_fallback_without_api_key(
@@ -132,4 +132,4 @@ def test_build_llm_refuses_fallback_without_api_key(
     monkeypatch.setattr(settings, "openai_api_key", None)
 
     with pytest.raises(RuntimeError, match="ARIA_OPENAI_API_KEY"):
-        _build_llm()
+        build_llm()

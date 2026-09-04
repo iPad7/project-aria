@@ -8,8 +8,13 @@ common의 principal_from_token으로 검증한다(토큰이 URL·로그에 남�
 
 응답을 보낸 사람에게만 돌려주지 않는다 — 메시지·응답을 방 토픽에 발행하고, 그 방을
 구독한 모든 연결(프로세스를 넘어)로 흘린다. 그래서 연결마다 두 펌프를 동시에 돌린다:
-inbound(수신 → 조율 코어 → 발행), outbound(구독 스트림 → 소켓). 구독을 발행보다 먼저
+inbound(수신 → 조율 코어), outbound(구독 스트림 → 소켓). 구독을 발행보다 먼저
 성립시켜(유실 방지) 보낸 사람도 자기 메시지를 스트림으로 되받는다(모두 같은 이벤트 순서).
+
+**발행은 이제 라우터가 하지 않는다.** C-4-1에서 표시 프레임 발행이 유스케이스로
+올라갔다 — 그래야 HTTP·WS가 같게 동작하고, 후원 표시보다 감사 응답이 먼저 나가는
+순서 뒤집힘이 생기지 않는다. 응답 프레임은 generation-worker가 발행한다. 여기 남은
+일은 수신·검증·인증과 스트림을 소켓으로 흘리는 것뿐이다.
 """
 
 from __future__ import annotations
@@ -30,8 +35,7 @@ from aria.contexts.chat.adapter.inbound.deps import (
     get_room_broadcaster,
 )
 from aria.contexts.chat.application.port.out.broadcast import RoomBroadcaster
-from aria.contexts.chat.application.service import ChatOrchestrationService, ChatReply
-from aria.contexts.chat.domain.source import ChatSource
+from aria.contexts.chat.application.service import ChatOrchestrationService
 
 # 애플리케이션 정의 close 코드(4000~4999).
 _CLOSE_UNAUTHORIZED = 4401
@@ -42,97 +46,34 @@ _AUTH_TIMEOUT = 5.0
 router = APIRouter(prefix="/rooms", tags=["chat"])
 
 
-async def _publish_reply(
-    broadcaster: RoomBroadcaster,
-    room_id: UUID,
-    persona_id: UUID,
-    reply: ChatReply,
-    source: ChatSource,
-) -> None:
-    # `source`가 있어야 클라이언트가 감사 응답과 일반 응답을 구분한다.
-    await broadcaster.publish(
-        room_id,
-        {
-            "type": "reply",
-            "room_id": str(room_id),
-            "persona_id": str(persona_id),
-            "source": source.value,
-            "text": reply.text,
-            "model_version": reply.model_version,
-        },
-    )
-
-
 async def _handle_message(
     service: ChatOrchestrationService,
-    broadcaster: RoomBroadcaster,
     room_id: UUID,
     principal: Principal,
     data: dict,
 ) -> None:
-    persona_id = UUID(data["persona_id"])
-    text = data["text"]
-    outcome = await service.handle_user_message(
+    await service.handle_user_message(
         room_id=room_id,
-        persona_id=persona_id,
+        persona_id=UUID(data["persona_id"]),
         author_id=principal.user_id,
-        text=text,
+        text=data["text"],
     )
-    await broadcaster.publish(
-        room_id,
-        {
-            "type": "message",
-            "room_id": str(room_id),
-            "author_id": str(principal.user_id),
-            "text": text,
-        },
-    )
-    if outcome.reply is not None:
-        await _publish_reply(
-            broadcaster, room_id, persona_id, outcome.reply, ChatSource.CHAT
-        )
 
 
 async def _handle_superchat(
     service: ChatOrchestrationService,
-    broadcaster: RoomBroadcaster,
     room_id: UUID,
     principal: Principal,
     data: dict,
 ) -> None:
-    """후원 프레임 처리.
-
-    **후원 표시는 감사 응답과 무관하게 항상 발행한다.** 슬롯을 못 잡아 응답이 없어도
-    차감은 이미 일어났으므로, 돈을 받아 두고 방송에 아무 것도 안 나가는 일은 없어야 한다.
-    차감 자체가 실패했다면 예외로 나가고 여기까지 오지 않는다.
-    """
-    persona_id = UUID(data["persona_id"])
-    amount = int(data["amount"])
-    message = data.get("message")
-    outcome = await service.handle_superchat(
+    await service.handle_superchat(
         room_id=room_id,
-        persona_id=persona_id,
+        persona_id=UUID(data["persona_id"]),
         donor_id=principal.user_id,
-        amount=amount,
-        message=message,
+        amount=int(data["amount"]),
+        message=data.get("message"),
         idempotency_key=data.get("idempotency_key"),
     )
-    await broadcaster.publish(
-        room_id,
-        {
-            "type": "superchat",
-            "room_id": str(room_id),
-            "persona_id": str(persona_id),
-            "donor_id": str(principal.user_id),
-            "donation_id": str(outcome.donation_id),
-            "amount": amount,
-            "message": message,
-        },
-    )
-    if outcome.reply is not None:
-        await _publish_reply(
-            broadcaster, room_id, persona_id, outcome.reply, ChatSource.SUPERCHAT
-        )
 
 
 async def _authenticate(websocket: WebSocket) -> Principal | None:
@@ -183,13 +124,9 @@ async def chat_ws(
                 kind = data.get("type", "message")
                 try:
                     if kind == "superchat":
-                        await _handle_superchat(
-                            service, broadcaster, room_id, principal, data
-                        )
+                        await _handle_superchat(service, room_id, principal, data)
                     else:
-                        await _handle_message(
-                            service, broadcaster, room_id, principal, data
-                        )
+                        await _handle_message(service, room_id, principal, data)
                 except InsufficientCreditError as exc:
                     # 후원 실패는 보낸 사람만 안다 — 방송에는 아무 것도 나가지 않는다.
                     await websocket.send_json(

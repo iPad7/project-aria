@@ -16,6 +16,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from fakeredis import FakeAsyncRedis, FakeRedis, FakeServer
+from generation_harness import RecordingEventBus
 from redis import RedisError
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
@@ -26,6 +27,7 @@ from aria.common.config import settings
 from aria.common.db import get_session
 from aria.common.ranking import DonorRank
 from aria.common.redis import get_redis, get_sync_redis
+from aria.contexts.chat.adapter.inbound import deps as chat_deps
 from aria.contexts.community.application.service import (
     MAX_RANKING_SIZE,
     RankingService,
@@ -348,6 +350,8 @@ def client(session: Session, sync_redis: FakeRedis) -> Iterator[TestClient]:
     app.dependency_overrides[get_redis] = lambda: FakeAsyncRedis(
         server=FakeServer(), decode_responses=True
     )
+    # 후원이 생성 요청을 발행한다 — 여기서는 브로커를 띄우지 않고 기록만 한다.
+    app.dependency_overrides[chat_deps.get_event_bus] = lambda: RecordingEventBus()
     with TestClient(app, raise_server_exceptions=False) as test_client:
         yield test_client
 
