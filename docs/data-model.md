@@ -136,21 +136,28 @@ LIMIT ?
 
 ## chat (aria DB)
 
-### chat_room
+### chat_room  *(구현됨)*
 | 컬럼 | 타입 | 제약/비고 |
 |---|---|---|
 | id | uuid | PK |
-| persona_id | uuid | FK→persona |
-| host_id | uuid | FK→user (호스트/관리자) |
+| persona_id | uuid | index (cross-context FK 없음) |
+| host_id | uuid | index — 방을 연 운영자 |
 | name | varchar(255) | not null (방송 제목) |
 | description | text | nullable |
 | thumbnail_url | varchar(512) | nullable |
-| status | varchar(10) | default 'pending' — pending/live/finished |
-| hls_url | varchar(512) | nullable (HLS 송출) |
-| created_at | timestamptz | |
-| closed_at | timestamptz | nullable |
+| status | varchar | default 'pending' — pending/live/finished, index |
+| created_at / updated_at | timestamptz | `ix_chat_room_status_created` (status, created_at DESC) |
+| — | — | `uq_chat_room_live_persona` **부분 유일**: unique(persona_id) WHERE status='live' |
 
-### chat_message_log  *(채팅 로그, 영구)*
+> **한 페르소나는 동시에 하나의 live 방만.** 스트리머가 두 방송을 동시에 할 수는 없다. **부분** 유일 인덱스여야 하는 이유: 그냥 unique(persona_id)면 끝난 방도 행으로 남으므로 그 페르소나가 두 번째 방송을 영영 못 연다. 그리고 앱에서 "이미 live가 있나?"를 먼저 보는 방식으로는 동시 요청 둘이 같은 답을 보고 둘 다 통과한다 — community의 좋아요, wallet의 멱등키와 같은 이유로 제약을 DB에 둔다.
+
+> **상태 전이는 전진만 한다**(`pending → live → finished`, pending에서 바로 finished도 가능). 되돌리기를 허용하면 "끝난 방송이 다시 살아나는" 상태가 생기는데 시청자에게도 정산에도 아카이브에도 설명할 수 없다. 다시 하려면 새 방을 연다.
+
+> **`hls_url`·`closed_at`은 아직 없다.** `hls_url`은 값이 생기는 시점이 미디어 송출이 붙을 때라 그때 함께 넣는다 — 지금 넣으면 영원히 NULL인 컬럼이 된다. 종료 시각은 `updated_at`이 대신하고 있어, 별도 컬럼이 필요해지는 근거가 생기면 그때 넣는다.
+
+> **방이 생기기 전에는 `room_id`가 아무 UUID나 됐다.** 그래서 존재하지 않는 방/페르소나에 크레딧을 태울 수 있었고, 차감은 진짜로 일어나 `wallet_donation`에 기록까지 남았다. 지금은 채팅·후원·WS가 전부 라이브 방에서만 된다.
+
+### chat_message_log  *(채팅 로그, 영구)* — **미구현**
 | 컬럼 | 타입 | 제약/비고 |
 |---|---|---|
 | id | uuid | PK |
@@ -159,7 +166,7 @@ LIMIT ?
 | content | text | not null |
 | created_at | timestamptz | index (room_id, created_at) |
 
-> 실시간 전달은 Redis pub/sub. 이 테이블은 영구 로그.
+> 실시간 전달은 Redis pub/sub. 이 테이블은 영구 로그(FR-CHAT-4). 방과 함께 만들지 않은 이유는 볼륨·보존정책이 얽힌 다른 관심사이기 때문이다.
 
 ### chat_room_log  *(입장/퇴장, P2)*
 | id | uuid PK | · room_id FK · user_id FK · action varchar(enter/exit) · timestamp |

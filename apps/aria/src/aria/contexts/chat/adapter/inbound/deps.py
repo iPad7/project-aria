@@ -17,16 +17,22 @@ from typing import Annotated
 
 from fastapi import Depends
 from redis.asyncio import Redis
+from sqlmodel import Session
 
+from aria.common.db import get_session
 from aria.common.eventbus import EventBusPort
 from aria.common.kafka import KafkaEventBus, get_broker
 from aria.common.redis import get_redis
 from aria.common.superchat import SuperchatPort
+from aria.contexts.chat.adapter.outbound.persistence.repository import (
+    SqlModelRoomRepository,
+)
 from aria.contexts.chat.adapter.outbound.redis.activity import RedisActivityTracker
 from aria.contexts.chat.adapter.outbound.redis.broadcast import RedisRoomBroadcaster
 from aria.contexts.chat.application.generation import GenerationRequestPublisher
 from aria.contexts.chat.application.port.out.activity import ActivityTracker
 from aria.contexts.chat.application.port.out.broadcast import RoomBroadcaster
+from aria.contexts.chat.application.room import RoomService
 from aria.contexts.chat.application.service import ChatOrchestrationService
 
 
@@ -72,3 +78,9 @@ def get_room_broadcaster(
     redis: Annotated[Redis, Depends(get_redis)],
 ) -> RoomBroadcaster:
     return RedisRoomBroadcaster(redis)
+
+
+def get_room_service(
+    session: Annotated[Session, Depends(get_session)],
+) -> RoomService:
+    return RoomService(SqlModelRoomRepository(session))

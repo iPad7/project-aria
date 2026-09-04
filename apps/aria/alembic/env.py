@@ -17,6 +17,9 @@ from sqlmodel import SQLModel
 from aria.common.config import settings
 
 # 테이블 모델 등록 (metadata 채우기). 새 테이블이 생기면 여기에 import 추가.
+from aria.contexts.chat.adapter.outbound.persistence import (  # noqa: F401
+    model as _chat_model,
+)
 from aria.contexts.community.adapter.outbound.persistence import (
     model as _community,  # noqa: F401
 )

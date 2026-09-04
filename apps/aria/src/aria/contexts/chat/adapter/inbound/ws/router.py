@@ -29,17 +29,25 @@ from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
 from aria.common.auth import Principal, principal_from_token
-from aria.common.errors import InsufficientCreditError, UnauthorizedError
+from aria.common.errors import (
+    InsufficientCreditError,
+    NotFoundError,
+    UnauthorizedError,
+)
 from aria.contexts.chat.adapter.inbound.deps import (
     get_chat_service,
     get_room_broadcaster,
+    get_room_service,
 )
 from aria.contexts.chat.application.port.out.broadcast import RoomBroadcaster
+from aria.contexts.chat.application.room import RoomService
 from aria.contexts.chat.application.service import ChatOrchestrationService
 
 # 애플리케이션 정의 close 코드(4000~4999).
 _CLOSE_UNAUTHORIZED = 4401
 _CLOSE_AUTH_TIMEOUT = 4408
+# 방송 중인 방이 아니다(없거나, 아직 시작 전이거나, 이미 끝났거나).
+_CLOSE_ROOM_NOT_LIVE = 4404
 # 첫 프레임(auth)을 기다리는 시간(초) — 미인증 연결이 오래 매달리지 않게.
 _AUTH_TIMEOUT = 5.0
 
@@ -96,11 +104,20 @@ async def chat_ws(
     room_id: UUID,
     service: Annotated[ChatOrchestrationService, Depends(get_chat_service)],
     broadcaster: Annotated[RoomBroadcaster, Depends(get_room_broadcaster)],
+    rooms: Annotated[RoomService, Depends(get_room_service)],
 ) -> None:
     await websocket.accept()
 
     principal = await _authenticate(websocket)
     if principal is None:
+        return
+
+    # 방을 **인증 뒤에** 확인한다 — 미인증 연결에 어떤 방이 존재하는지 알려 줄
+    # 이유가 없다. 개설만 해 둔 방송의 존재가 밖으로 새지 않는다.
+    try:
+        await rooms.ensure_open(room_id)
+    except NotFoundError:
+        await websocket.close(code=_CLOSE_ROOM_NOT_LIVE)
         return
 
     # 구독을 먼저 성립시킨다 — 이후 발행분(자기 메시지 포함)을 유실 없이 받는다.

@@ -38,6 +38,23 @@ class SuperchatOutcomeResponse(SchemaBase):
     balance_after: int
 
 
+class OpenRoomRequest(SchemaBase):
+    persona_id: UUID  # 이 방에서 방송할 스트리머
+    name: str = Field(min_length=1, max_length=255)
+    description: str | None = None
+    thumbnail_url: str | None = Field(default=None, max_length=512)
+
+
+class RoomResponse(SchemaBase):
+    id: UUID
+    persona_id: UUID
+    host_id: UUID
+    name: str
+    description: str | None
+    thumbnail_url: str | None
+    status: str
+
+
 class RoomStateResponse(SchemaBase):
     idle: bool
     seconds_since_last: float | None
