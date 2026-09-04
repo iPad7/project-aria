@@ -8,3 +8,8 @@ wheels/
 
 # Virtual environments
 .venv
+
+# 로컬 설정 — 키가 들어간다. .env.example 만 커밋한다.
+.env
+.env.*
+!.env.example

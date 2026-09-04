@@ -28,6 +28,7 @@ from uuid import UUID
 from aria.common.eventbus import Event, EventBusPort
 from aria.common.ids import new_id
 from aria.common.persona_profile import PersonaProfilePort
+from aria.common.tracing import Observation, TracingPort
 from aria.contexts.chat.application.persona_prompt import system_message
 from aria.contexts.chat.application.port.out.broadcast import RoomBroadcaster
 from aria.contexts.chat.application.port.out.coordinator import ResponseCoordinator
@@ -143,24 +144,46 @@ class ResponseGenerationService:
         llm: PersonaLLMPort,
         broadcaster: RoomBroadcaster,
         profiles: PersonaProfilePort,
+        tracing: TracingPort,
     ) -> None:
         self._coordinator = coordinator
         self._llm = llm
         self._broadcaster = broadcaster
         self._profiles = profiles
+        self._tracing = tracing
 
     async def handle(self, request: GenerationRequest) -> None:
+        # 바깥 span. 어댑터가 못 보는 맥락(어느 방·무엇이 촉발·중복인지)이 여기 있고,
+        # LLM 호출 span은 이 안에 중첩된다. `docs/architecture.md` 참조.
+        with self._tracing.observe(
+            f"response:{request.source.value}",
+            input=request.prompt,
+            metadata={
+                "room_id": str(request.room_id),
+                "persona_id": str(request.persona_id),
+                "source": request.source.value,
+                "msg_id": str(request.msg_id),
+            },
+        ) as trace:
+            await self._handle(request, trace)
+
+    async def _handle(self, request: GenerationRequest, trace: Observation) -> None:
         slot = await self._coordinator.try_acquire(request.room_id, request.source)
         if slot is None:
             # 더 높은/같은 우선순위가 응답 중이다. 이 요청은 조용히 버린다 —
             # 사용자의 메시지·후원 표시는 이미 방송에 나갔고, 없는 것은 응답뿐이다.
+            trace.set_metadata({"outcome": "no_slot"})
             return
 
         try:
             # 인격은 여기서 붙는다. 프로필이 없으면 공통 프롬프트로 폴백하되 그
             # 사실을 남긴다 — 관측성이 붙으면 "몇 %가 프로필 없이 도는가"가 된다.
             profile = await self._profiles.profile_of(request.persona_id)
-            if profile is None or not profile.has_voice():
+            has_voice = profile is not None and profile.has_voice()
+            # #59에서 로그로만 남기던 것이 이제 트레이스 속성이 된다 — "몇 %가
+            # 프로필 없이 도는가"를 셀 수 있다.
+            trace.set_metadata({"has_persona_voice": has_voice})
+            if not has_voice:
                 logger.info(
                     "페르소나 프로필 없음 — 공통 프롬프트로 답한다 persona_id=%s",
                     request.persona_id,
@@ -175,6 +198,9 @@ class ResponseGenerationService:
             if not await self._coordinator.still_holds(request.room_id, slot):
                 # 생성하는 동안 선점당했다 — 만들어 둔 응답을 버린다. 생성은 외부
                 # 호출이라 중간에 취소할 수 없으므로, 취소 대신 내보내기 직전에 확인한다.
+                #
+                # 이 표시가 특히 쓸모 있다: **버려진 생성의 비용**이 보인다.
+                trace.set_metadata({"outcome": "preempted"})
                 return
             await self._broadcaster.publish(
                 request.room_id,
@@ -188,5 +214,7 @@ class ResponseGenerationService:
                     "model_version": result.model_version,
                 },
             )
+            trace.set_output(result.text)
+            trace.set_metadata({"outcome": "published"})
         finally:
             await self._coordinator.release(request.room_id, slot)

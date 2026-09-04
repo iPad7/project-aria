@@ -66,6 +66,8 @@ flowchart LR
 | **aria 모놀리스** | contexts: identity·persona·community·chat·streaming·wallet | api / generation-worker / idle-worker (같은 이미지) | 워커로 독립 스케일. wallet은 후원 핫패스라 여기 |
 | **broadcaster** | 아바타 렌더 · TTS · 인코딩 | 별도 프로세스/머신 | **별도 repo.** 스트리머 PC 역할이라 aria 밖이다(inference와 같은 이유) |
 
+> **api는 Kafka 연결을 지연으로 맺는다.** 워커(FastStream)는 프레임워크가 생명주기를 잡아 주지만 api(FastAPI)는 아니라, 연결 없이 발행하면 `IncorrectState`로 죽는다 — 실제로 띄워 보고 찾았다(포트를 가짜로 갈아끼우는 테스트들은 그 경로를 타지 않는다). startup에서 연결하지 않는 이유: Kafka가 늦게 떠도 api는 떠야 하고(채팅 말고도 하는 일이 많다), 반대로 startup에서 기다리면 브로커 없는 환경에서 기동이 막힌다.
+
 > **generation-worker는 실체가 있다**(C-4-1). 진입점 `aria/workers/generation.py`, 실행은 `uv run faststream run aria.workers.generation:app`. api와 같은 이미지에 진입점만 다르며, 같은 consumer group 안에서 복제본을 늘리는 것이 곧 수평 확장이다. **합성 루트가 둘**인 셈인데(`app.py`와 여기), 둘 다 common과 컨텍스트를 함께 아는 자리라 common 밖 최상위에 둔다. idle-worker도 실체가 있다(아래). **media-worker는 없어졌다** — 그 일은 브로드캐스터로 나갔다.
 >
 > **idle 워커가 셋째 진입점이다**(`aria/workers/idle.py`, 실행 `uv run python -m aria.workers.idle`). 무채팅이 지속되면 사연을 읽거나 자율발화한다(FR-IDLE). FastStream은 메시지가 와야 깨어나므로 generation-worker에 합치지 않았다 — idle은 정반대로 "아무 일도 없을 때" 도는 타이머다.
@@ -157,8 +159,18 @@ aria는 **플랫폼**이다. AI 스트리머에게는 사람도 PC도 없으므�
 
 ## 관측성 — 두 레이어
 
-- 시스템: OpenTelemetry SDK(FastAPI·httpx·redis·kafka·sqlalchemy) → SigNoz.
-- LLM: 토큰·비용·지연·품질을 모델 버전별 → Langfuse(생성 어댑터에서 계측).
+- 시스템: OpenTelemetry SDK(FastAPI·httpx·redis·kafka·sqlalchemy) → SigNoz. **미구현** — 아직 부하가 없어 뒤로 미뤘다(WS 구독 공유 최적화와 같은 판단).
+- LLM: 토큰·비용·지연·품질을 모델 버전별 → Langfuse. **구현됨** — `TracingPort`(`common/tracing.py`) 뒤에 있고 **기본은 no-op**이라 키 없는 로컬·CI가 그대로 통과한다.
+
+> **계측 위치가 둘이다.** 이전 판은 "생성 어댑터에서 계측"이라고 적었으나, **어댑터 혼자서는 필요한 걸 다 못 본다** — `PersonaLLMPort.generate()`는 `persona_id`와 `messages`만 받아 `room_id`·`source`·`msg_id`·프로필 유무를 모른다. 그래서 바깥 span은 **서비스**가(맥락), 안쪽 generation은 **어댑터**가(호출) 만들고 중첩된다. Langfuse의 trace/generation 모델이 정확히 이 구조다.
+
+> **계측을 폴백 안쪽에 감싼다** — `FallbackPersonaLLM(Traced(primary), Traced(fallback))`. 바깥에 감싸면 호출 1건에 generation 1개만 남아 "주 백엔드가 실패해서 폴백했다"가 트레이스에서 사라지고 `model_version`으로만 추측하게 된다. 안쪽이면 폴백 시 generation이 **두 개** 남는다.
+
+> **관측이 생성을 죽이지 않는다.** 백엔드가 느리거나 죽어도 방송은 계속돼야 하므로 어댑터는 어떤 예외도 밖으로 내보내지 않는다(캐시 어댑터들과 같은 방침). 켜 뒀는데 키가 없으면 경고만 남기고 no-op로 간다 — 폴백 LLM(NFR-REL-3)과 달리 관측은 없어도 서비스가 성립한다.
+
+> **샘플링이 기본이다**(0.2). Langfuse의 과금 단위는 trace가 아니라 **observation 하나하나**(span·generation·score)라, 이 설계는 응답 1건이 3유닛쯤이다. idle 루프가 ~10초에 한 번 발화하므로 켜 두면 무료 한도(월 50k 유닛)가 빠르게 소진된다. 샘플링은 trace 단위로 적용되므로 **한 응답의 span과 generation이 같이 남거나 같이 빠진다** — 반쪽 트레이스가 생기지 않는다.
+
+> **클라우드를 쓴다.** 자체호스팅은 컨테이너 6개(web·worker·ClickHouse·MinIO·Redis·Postgres)에 4코어/16GB 권장이라, 지금 compose(Postgres·Redis·Kafka) 위에 얹기에 무겁다. 대가는 **프롬프트·응답이 외부로 나간다**는 것 — 지금은 합성 페르소나와 테스트 사연뿐이라 감수하지만, **시청자 사연이 실제 사람의 것이 되면 자체호스팅으로 옮긴다.** 그때 코드는 바뀌지 않는다(포트 뒤 어댑터 교체).
 
 ## 데이터
 

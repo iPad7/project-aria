@@ -17,6 +17,7 @@ from sqlmodel import Session
 from aria.common.config import settings
 from aria.common.db import engine
 from aria.common.kafka import KafkaEventBus, get_broker
+from aria.common.langfuse_tracing import build_tracing
 from aria.common.redis import get_redis
 from aria.common.topics import ensure_topics
 from aria.contexts.chat.adapter.inbound.worker import router as worker_router
@@ -58,11 +59,14 @@ def create_app() -> FastStream:
         redis,
     )
 
+    # 관측은 기본이 no-op이다 — 키 없는 로컬·CI가 그대로 돈다.
+    tracing = build_tracing()
     service = ResponseGenerationService(
         coordinator=RedisResponseCoordinator(redis),
-        llm=build_llm(),
+        llm=build_llm(tracing),
         broadcaster=RedisRoomBroadcaster(redis),
         profiles=profiles,
+        tracing=tracing,
     )
     # 배달 보증(멱등·DLQ)은 어댑터가 입힌다 — 위 서비스는 그런 게 있는 줄 모른다.
     consumer = GenerationConsumer(
@@ -75,6 +79,11 @@ def create_app() -> FastStream:
     )
 
     app = FastStream(broker)
+
+    @app.on_shutdown
+    async def flush_traces() -> None:
+        # 버퍼에 남은 관측을 내보낸다. 안 하면 마지막 몇 건이 사라진다.
+        tracing.flush()
 
     @app.on_startup
     async def declare_topics() -> None:

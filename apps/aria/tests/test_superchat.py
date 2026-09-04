@@ -25,6 +25,7 @@ from aria.common.config import settings
 from aria.common.db import get_session
 from aria.common.redis import get_redis
 from aria.common.superchat import SuperchatReceipt
+from aria.common.tracing import NoOpTracing
 from aria.contexts.chat.adapter.inbound import deps as chat_deps
 from aria.contexts.chat.adapter.outbound.redis.coordinator import (
     RedisResponseCoordinator,
@@ -383,6 +384,7 @@ async def test_preempted_reply_is_never_published(redis: FakeAsyncRedis) -> None
         llm=_PreemptingLLM(coordinator, room),
         broadcaster=broadcaster,
         profiles=StubProfiles(),
+        tracing=NoOpTracing(),
     )
 
     await worker.handle(_request(room))
@@ -399,6 +401,7 @@ async def test_unpreempted_reply_is_published(redis: FakeAsyncRedis) -> None:
         llm=_StubLLM(),
         broadcaster=(broadcaster := _RecordingBroadcaster()),
         profiles=StubProfiles(),
+        tracing=NoOpTracing(),
     )
 
     await worker.handle(_request(room))
@@ -418,6 +421,7 @@ async def test_worker_skips_generation_without_a_slot(redis: FakeAsyncRedis) -> 
         llm=_StubLLM(),
         broadcaster=(broadcaster := _RecordingBroadcaster()),
         profiles=StubProfiles(),
+        tracing=NoOpTracing(),
     )
     await coordinator.try_acquire(room, ChatSource.SUPERCHAT)  # 이미 점유 중
 
@@ -437,6 +441,7 @@ async def test_worker_releases_the_slot_after_generating(
         llm=_StubLLM(),
         broadcaster=_RecordingBroadcaster(),
         profiles=StubProfiles(),
+        tracing=NoOpTracing(),
     )
 
     await worker.handle(_request(room))
@@ -500,6 +505,7 @@ async def test_superchat_stands_even_if_no_response_ever_comes(
         llm=_StubLLM(),
         broadcaster=(worker_out := _RecordingBroadcaster()),
         profiles=StubProfiles(),
+        tracing=NoOpTracing(),
     )
     await worker.handle(GenerationRequest.from_payload(events.published[0].payload))
 
