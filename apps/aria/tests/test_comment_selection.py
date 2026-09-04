@@ -8,6 +8,7 @@
 4. **후보가 무한정 쌓이는 것.** 오래된 댓글에 뒤늦게 답하는 것이 더 이상하다.
 """
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -310,3 +311,25 @@ def test_chatter_does_not_get_swallowed_into_the_hot_topic() -> None:
 
     sizes = sorted(t.size for t in topics)
     assert sizes == [1, 1, 2]  # 고백 묶음 하나 + 잡담 둘
+
+
+async def test_take_all_does_not_lose_a_concurrent_arrival(
+    redis: FakeAsyncRedis,
+) -> None:
+    """읽기와 비우기가 한 명령(`LPOP count`)이라 그 사이가 없다.
+
+    처음에는 `LRANGE` + `DELETE` 를 파이프라인으로 묶고 "유실 허용"이라 적었지만,
+    한 명령으로 되는 것을 굳이 유실시킬 이유가 없었다.
+    """
+    buffer = RedisCandidateBuffer(redis)
+    room = uuid4()
+    for i in range(5):
+        await buffer.add(room, _c(f"메시지 {i}"))
+
+    taken, _ = await asyncio.gather(
+        buffer.take_all(room), buffer.add(room, _c("동시에 들어온 것"))
+    )
+    remaining = await buffer.take_all(room)
+
+    # 꺼낸 것 + 남은 것 = 넣은 것 전부. 어느 쪽으로 갈리든 사라지지는 않는다.
+    assert len(taken) + len(remaining) == 6

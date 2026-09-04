@@ -4,9 +4,11 @@
 남지 않도록 하는 유일한 장치다 — 방 종료 훅에 기대지 않는 이유는 워커가 죽거나
 방송이 비정상 종료돼도 스스로 사라져야 하기 때문이다.
 
-`take_all`은 `LRANGE` + `DELETE`를 파이프라인 한 번에 묶는다. 둘 사이에 새 후보가
-들어오면 그건 유실이지만, 채팅 후보는 유실 허용 데이터다(pub/sub 팬아웃과 같은 성격).
-원자성을 위해 Lua를 들이는 것은 이 데이터의 값어치에 비해 과하다.
+`take_all`은 **`LPOP key count`** 한 번이다. 읽기와 비우기가 한 명령이라 그 사이에
+들어온 후보가 유실되지 않는다 — 처음에는 `LRANGE` + `DELETE` 를 파이프라인으로 묶고
+"유실 허용"이라 적었지만, 한 명령으로 되는 것을 굳이 유실시킬 이유가 없었다.
+
+상한과 같은 개수를 뽑으므로 남는 것도 없다.
 """
 
 from __future__ import annotations
@@ -40,11 +42,8 @@ class RedisCandidateBuffer:
             await pipe.execute()
 
     async def take_all(self, room_id: UUID) -> list[Candidate]:
-        key = _key(room_id)
-        async with self._redis.pipeline(transaction=True) as pipe:
-            pipe.lrange(key, 0, -1)
-            pipe.delete(key)
-            raw, _ = await pipe.execute()
+        # 상한만큼 한 번에 뽑는다. 버퍼가 그 이상 자라지 않으므로 남는 것이 없다.
+        raw = await self._redis.lpop(_key(room_id), _MAX_CANDIDATES) or []
 
         candidates: list[Candidate] = []
         for item in raw:
