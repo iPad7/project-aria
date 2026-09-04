@@ -14,15 +14,25 @@ from __future__ import annotations
 from faststream import FastStream
 
 from aria.common.config import settings
-from aria.common.kafka import get_broker
+from aria.common.kafka import KafkaEventBus, get_broker
 from aria.common.redis import get_redis
+from aria.common.topics import ensure_topics
 from aria.contexts.chat.adapter.inbound.worker import router as worker_router
+from aria.contexts.chat.adapter.inbound.worker.router import (
+    DLQ_SUFFIX,
+    GenerationConsumer,
+)
 from aria.contexts.chat.adapter.outbound.inference.factory import build_llm
 from aria.contexts.chat.adapter.outbound.redis.broadcast import RedisRoomBroadcaster
 from aria.contexts.chat.adapter.outbound.redis.coordinator import (
     RedisResponseCoordinator,
 )
-from aria.contexts.chat.application.generation import ResponseGenerationService
+from aria.contexts.chat.adapter.outbound.redis.dedup import RedisProcessedRegistry
+from aria.contexts.chat.application.generation import (
+    RESPONSE_REQUESTED,
+    SUPERCHAT_REQUESTED,
+    ResponseGenerationService,
+)
 
 
 def create_app() -> FastStream:
@@ -36,8 +46,32 @@ def create_app() -> FastStream:
         llm=build_llm(),
         broadcaster=RedisRoomBroadcaster(redis),
     )
-    worker_router.register(broker, service, group_id=settings.generation_consumer_group)
-    return FastStream(broker)
+    # 배달 보증(멱등·DLQ)은 어댑터가 입힌다 — 위 서비스는 그런 게 있는 줄 모른다.
+    consumer = GenerationConsumer(
+        service,
+        RedisProcessedRegistry(redis, ttl_seconds=settings.dedup_ttl_seconds),
+        KafkaEventBus(broker),
+    )
+    worker_router.register(
+        broker, consumer, group_id=settings.generation_consumer_group
+    )
+
+    app = FastStream(broker)
+
+    @app.on_startup
+    async def declare_topics() -> None:
+        # 구독이 시작되기 전에 파티션 수를 못박는다 — 자동 생성에 맡기면 1개가 되어
+        # 워커를 여럿 띄워도 하나만 일한다.
+        await ensure_topics(
+            [
+                RESPONSE_REQUESTED,
+                SUPERCHAT_REQUESTED,
+                RESPONSE_REQUESTED + DLQ_SUFFIX,
+                SUPERCHAT_REQUESTED + DLQ_SUFFIX,
+            ]
+        )
+
+    return app
 
 
 app = create_app()

@@ -23,6 +23,7 @@
 | `aria.chat.response-requested` | chat api | `generation-workers` | room_id | msg_id, room_id, persona_id, source, prompt, requested_at | **구현됨** (C-4-1) |
 | `aria.chat.superchat-requested` | chat api (후원 수신) | `generation-workers` | room_id | 위와 같은 모양 (`source="superchat"`) | **구현됨** (C-4-1) |
 | `aria.streaming.response-generated` | generation-worker | media-workers | room_id | msg_id, room_id, persona_id, text, emotion, model_version, generated_at | 미구현 — media-worker가 없다 |
+| `<topic>.dlq` | generation-worker | (사람) | 원본과 같음 | original_topic, failed_at, error, original | **구현됨** (C-4-2) |
 
 > **두 요청 토픽의 페이로드는 같은 모양이다.** 원래 표는 `selected_comment`/`donor`처럼 서로 다른 필드를 적어 두었지만, 워커에게 필요한 것은 결국 "어느 방의 어느 페르소나가 무엇에 답하는가"뿐이라 하나의 `GenerationRequest`로 합쳤다. 후원 금액·메시지는 문구로 풀려 `prompt`에 들어간다. (`selected_comment`가 사라진 또 다른 이유: 선별(FR-GEN-1·2)이 아직 없어 실제로 실리는 것은 사용자가 보낸 원문이다.)
 
@@ -56,11 +57,24 @@
 
 ## 전달 의미론
 
-- **at-least-once**: consumer group이 처리 후 offset commit. 중복은 멱등키로 흡수 — `msg_id`(생성) / `idempotency_key`(크레딧).
+**토픽마다 다르다.** 하나로 통일하지 않은 것이 C-4-2의 핵심 결정이고, 토픽을 갈라 둔 값이 여기서 나온다.
+
+| 토픽 | ack | 의미론 | 잃으면 |
+|---|---|---|---|
+| `aria.chat.response-requested` | `ACK_FIRST` (핸들러 전 커밋) | **at-most-once** | "AI가 그 말엔 답을 안 했네" — 채팅 응답은 시간이 지나면 가치를 잃는다 |
+| `aria.chat.superchat-requested` | `ACK` (핸들러 후 커밋) | **at-least-once** | 돈을 낸 사람이 아무 반응도 못 받는다 — 다른 무게의 사고다 |
+
+> ⚠️ **이전 판은 "at-least-once"라고만 적혀 있었고 코드는 그렇지 않았다.** FastStream의 기본값이 `ACK_FIRST`(핸들러 **전** 커밋)라 실제로는 at-most-once였고, 생성 중 워커가 죽으면 메시지가 재시도 없이 사라졌다. C-4-1이 그 값을 명시하지 않고 기본값에 맡긴 결과이며, C-4-2에서 토픽별로 명시했다.
+
+예외는 두 정책 모두에서 핸들러가 삼켜 DLQ로 보내므로, 둘의 실질적 차이는 **프로세스가 통째로 죽는 경우**다. 그게 정확히 구분하려던 경우다.
+
+- **멱등**: `msg_id`를 Redis `SET NX`로 **claim**한다(생성) / `idempotency_key`(크레딧). "봤음" 표시가 아니라 claim이라는 점이 중요하다 — 잡고 → 처리하고 → **실패하면 놓는다**. 표시만 남기면 일시 실패가 영구 유실이 되어 at-least-once로 바꾼 의미가 사라진다. TTL(기본 1시간)은 재전달 창보다 길고, 사람이 DLQ를 보는 주기보다는 짧다. 워커가 DB를 모른다는 설계를 지키려고 Redis에 둔다 — 슬롯이 이미 Redis에 있으므로 새 의존도 아니다.
 - **순서**: 같은 `key`(room_id·user_id)는 같은 파티션 → 순서 보장.
+- **파티션 수는 코드가 선언한다**(`common/topics.py`, 파티션 3). 자동 생성에 맡기면 1개가 되어 워커를 몇 대 띄우든 하나만 일한다 — consumer group은 파티션 단위로 나눠 갖기 때문이다. **기존 토픽의 파티션은 늘리지 않는다**: 늘리면 키→파티션 매핑이 바뀌어 같은 방의 과거·미래 메시지가 다른 파티션에 가고 순서 보장이 그 지점에서 끊긴다. 운영자가 알고 하는 편이 낫다.
 - **outbox** (payments): `payment` 상태변경 + `outbox` 로우를 **한 로컬 트랜잭션**에 기록 → relay가 `outbox`를 폴링/CDC로 Kafka 발행 → `published`로 마킹. 이중발행·유실 방지.
-- **DLQ**: N회 실패 시 `<topic>.dlq`로 이동, 수동/배치 재처리. (N·재시도 간격 미확정)
-- **스키마 버저닝**: 페이로드에 `v` 필드 또는 스키마 레지스트리 — 미확정.
+- **DLQ**: **재시도 0회**, 실패 즉시 `<topic>.dlq`. 원본 페이로드 + `original_topic`·`failed_at`·`error`를 함께 싣고, 키는 원본과 같아 DLQ에서도 방별 순서가 남는다. 사람이 보고 판단한다(후원이면 환불이든 재처리든).
+  > **왜 재시도하지 않나.** ① 인프로세스 재시도는 파티션을 막는다(head-of-line blocking) — 같은 방의 뒤 메시지가 앞 메시지의 백오프를 기다린다. ② 30초 뒤에 성공한 응답은 이미 늦었다. at-least-once의 값은 "늦게라도 성공"이 아니라 **"조용히 사라지지 않는다"**에 있다. 자동 재시도로 한참 뒤에 감사 응답이 튀어나오는 것이 오히려 이상하다.
+- **스키마 버저닝**: 페이로드에 `v` 필드. 지금은 `v: 1`이고, **모르는 버전은 추측하지 않고 DLQ로 보낸다** — 필드가 바뀐 메시지를 옛 코드가 반쯤 읽어 이상한 응답을 내보내는 것이 최악이다. `v`가 없는 페이로드는 1로 본다(C-4-2 이전에 발행돼 큐에 남아 있던 것). 소비자가 아직 우리 자신뿐일 때가 넣는 비용이 가장 싼 시점이라 미리 넣었다.
 
 ---
 
@@ -152,4 +166,5 @@ api는 요청을 접수하고 **표시할 것을 발행한 뒤** 생성을 큐�
 
 ## 미확정
 
-- DLQ 재시도 정책 수치, 스키마 버저닝 방식, 파티션 수
+- payments outbox relay(폴링 vs CDC), 운영 파티션·복제 수(IaC), DLQ 재처리 도구
+  > DLQ 재시도 정책·스키마 버저닝·개발 파티션 수는 C-4-2에서 확정했다(위 "전달 의미론").
