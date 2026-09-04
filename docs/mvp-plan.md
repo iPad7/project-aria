@@ -26,6 +26,7 @@
 
 - [x] persona 도메인(CRUD·소유권) — `name`/`tagline`/`description` 수준
 - [ ] persona 레거시 스키마 계승 — `core_value`(M:N) · `communication_style` · `moral_compass` · `personality_trait` · `tts_settings` 미구현(`docs/data-model.md`에 설계만). 페르소나별 프롬프트 해석(#22)과 방송국 프로필(FR-STATION-1)이 이걸 필요로 함
+- [x] 방(Room) — 개설·상태(pending/live/finished)·라이브 유일성. 채팅·후원·WS가 라이브 방에서만 된다. idle 루프와 미디어 송출(`hls_url`)의 전제
 - [ ] 토픽스레드 · MediaPacket/seq · 응답선별
 - [x] WebSocket 채팅 수신·브로드캐스트 (Redis pub/sub 백플레인)
 - [x] 세션/큐·조율 상태 Redis 외부화

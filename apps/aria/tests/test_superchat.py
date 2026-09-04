@@ -15,6 +15,7 @@ from uuid import UUID, uuid4
 import pytest
 from fakeredis import FakeAsyncRedis, FakeServer
 from generation_harness import RecordingEventBus, direct_bus
+from room_harness import live_room
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 from starlette.testclient import TestClient
@@ -111,7 +112,8 @@ def _token(user_id: UUID) -> str:
 def test_superchat_debits_and_records(
     client: TestClient, wallets: WalletService, donations: DonationService, donor_id
 ) -> None:
-    room, persona = uuid4(), uuid4()
+    persona = uuid4()
+    room = live_room(client, persona)
     wallets.grant(donor_id, 1000, idempotency_key="seed")
 
     res = client.post(
@@ -145,8 +147,9 @@ def test_superchat_requests_generation_on_its_own_topic(
     app.dependency_overrides[chat_deps.get_event_bus] = lambda: events
     wallets.grant(donor_id, 1000, idempotency_key="seed")
 
-    room = uuid4()
     with TestClient(app, raise_server_exceptions=False) as client:
+        room = live_room(client)
+        events.published.clear()  # 방 개설은 생성 요청을 내지 않는다 — 여기서 초기화
         client.post(
             f"/rooms/{room}/superchats",
             json={"persona_id": str(uuid4()), "amount": 300, "message": "응원합니다"},
@@ -164,7 +167,8 @@ def test_superchat_requests_generation_on_its_own_topic(
 def test_superchat_without_credit_is_rejected(
     client: TestClient, wallets: WalletService, donations: DonationService, donor_id
 ) -> None:
-    room, persona = uuid4(), uuid4()
+    persona = uuid4()
+    room = live_room(client, persona)
     wallets.grant(donor_id, 100, idempotency_key="seed")
 
     res = client.post(
@@ -184,7 +188,8 @@ def test_superchat_is_idempotent_with_key(
     client: TestClient, wallets: WalletService, donations: DonationService, donor_id
 ) -> None:
     # 재연결 후 재전송이 이중 과금되면 안 된다.
-    room, persona = uuid4(), uuid4()
+    persona = uuid4()
+    room = live_room(client, persona)
     wallets.grant(donor_id, 1000, idempotency_key="seed")
     body = {"persona_id": str(persona), "amount": 300, "idempotency_key": "dup"}
 
@@ -220,7 +225,8 @@ def test_superchat_rejects_non_positive_amount(
 def test_ws_superchat_broadcasts_donation_then_reply(
     client: TestClient, wallets: WalletService, donor_id: UUID
 ) -> None:
-    room, persona = uuid4(), uuid4()
+    persona = uuid4()
+    room = live_room(client, persona)
     wallets.grant(donor_id, 1000, idempotency_key="seed")
 
     with client.websocket_connect(f"/rooms/{room}/ws") as ws:
@@ -249,7 +255,7 @@ def test_ws_plain_message_still_works_without_type(
     client: TestClient, donor_id: UUID
 ) -> None:
     # type이 없으면 기존 클라이언트처럼 일반 메시지로 취급한다(하위 호환).
-    room = uuid4()
+    room = live_room(client)
     with client.websocket_connect(f"/rooms/{room}/ws") as ws:
         ws.send_json({"token": _token(donor_id)})
         ws.send_json({"persona_id": str(uuid4()), "text": "안녕하세요"})
@@ -264,7 +270,7 @@ def test_ws_plain_message_still_works_without_type(
 def test_ws_superchat_without_credit_keeps_connection(
     client: TestClient, donor_id: UUID
 ) -> None:
-    room = uuid4()
+    room = live_room(client)
     with client.websocket_connect(f"/rooms/{room}/ws") as ws:
         ws.send_json({"token": _token(donor_id)})
 

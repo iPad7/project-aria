@@ -4,11 +4,13 @@ from uuid import uuid4
 import pytest
 from fakeredis import FakeAsyncRedis, FakeServer
 from generation_harness import direct_bus
+from room_harness import live_room, memory_session_override
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from aria.app import create_app
 from aria.common.config import settings
+from aria.common.db import get_session
 from aria.common.redis import get_redis
 from aria.contexts.chat.adapter.inbound import deps as chat_deps
 from aria.contexts.identity.adapter.outbound.security.jwt_token_service import (
@@ -31,12 +33,15 @@ def client() -> Iterator[TestClient]:
     app.dependency_overrides[get_redis] = lambda: fake
     # 워커를 같은 프로세스에서 태운다 — 응답은 이제 워커가 만들어 방 채널로 발행한다.
     app.dependency_overrides[chat_deps.get_event_bus] = lambda: direct_bus(fake)
+    # 방이 생기면서 chat도 DB를 쓴다 — 채팅은 라이브 방에서만 된다.
+    app.dependency_overrides[get_session] = memory_session_override()
     with TestClient(app) as test_client:
         yield test_client
 
 
 def test_ws_broadcasts_message_then_reply(client: TestClient) -> None:
-    room, persona = uuid4(), uuid4()
+    persona = uuid4()
+    room = live_room(client, persona)
     with client.websocket_connect(f"/rooms/{room}/ws") as ws:
         ws.send_json({"token": _token()})
         ws.send_json({"persona_id": str(persona), "text": "안녕하세요"})
@@ -69,7 +74,7 @@ def test_ws_rejects_missing_token(client: TestClient) -> None:
 
 
 def test_ws_invalid_frame_keeps_connection(client: TestClient) -> None:
-    room = uuid4()
+    room = live_room(client)
     with client.websocket_connect(f"/rooms/{room}/ws") as ws:
         ws.send_json({"token": _token()})
 
@@ -86,7 +91,7 @@ def test_ws_invalid_frame_keeps_connection(client: TestClient) -> None:
 
 
 def test_ws_two_clients_same_room_see_each_other(client: TestClient) -> None:
-    room = uuid4()
+    room = live_room(client)
     with (
         client.websocket_connect(f"/rooms/{room}/ws") as viewer,
         client.websocket_connect(f"/rooms/{room}/ws") as speaker,

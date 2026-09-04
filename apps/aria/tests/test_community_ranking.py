@@ -18,6 +18,7 @@ import pytest
 from fakeredis import FakeAsyncRedis, FakeRedis, FakeServer
 from generation_harness import RecordingEventBus
 from redis import RedisError
+from room_harness import live_room
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 from starlette.testclient import TestClient
@@ -387,7 +388,8 @@ def test_donating_puts_a_named_supporter_on_the_board(client: TestClient) -> Non
     세 컨텍스트가 서로를 import하지 않고도 한 화면을 만들어 내는지가 여기서 드러난다.
     배선이 빠지면 `NotImplementedError`로 500이 난다.
     """
-    persona_id, room_id = uuid4(), uuid4()
+    persona_id = uuid4()
+    room_id = live_room(client, persona_id)
     donor_id, donor_headers = _register(client, "열혈시청자")
     client.post(
         "/wallet/grants",

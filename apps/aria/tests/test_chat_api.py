@@ -4,10 +4,12 @@ from uuid import uuid4
 import pytest
 from fakeredis import FakeAsyncRedis, FakeServer
 from generation_harness import RecordingEventBus
+from room_harness import live_room, memory_session_override
 from starlette.testclient import TestClient
 
 from aria.app import create_app
 from aria.common.config import settings
+from aria.common.db import get_session
 from aria.common.redis import get_redis
 from aria.contexts.chat.adapter.inbound import deps as chat_deps
 from aria.contexts.chat.application.generation import RESPONSE_REQUESTED
@@ -36,6 +38,7 @@ def client(events: RecordingEventBus) -> Iterator[TestClient]:
     app.dependency_overrides[get_redis] = lambda: fake
     # 생성은 워커의 일이라 여기서는 발행만 기록한다 — 브로커를 띄우지 않는다.
     app.dependency_overrides[chat_deps.get_event_bus] = lambda: events
+    app.dependency_overrides[get_session] = memory_session_override()
     # context manager로 열어 요청들이 하나의 이벤트 루프를 공유하게 한다(fakeredis 루프 바인딩).
     with TestClient(app, raise_server_exceptions=False) as test_client:
         yield test_client
@@ -45,7 +48,8 @@ def test_post_message_is_accepted_without_a_reply(
     client: TestClient, events: RecordingEventBus
 ) -> None:
     # C-4-1부터 응답은 요청 경로에서 나오지 않는다 — 202로 접수만 하고 생성을 맡긴다.
-    room, persona = uuid4(), uuid4()
+    persona = uuid4()
+    room = live_room(client, persona)
     resp = client.post(
         f"/rooms/{room}/messages",
         json={"persona_id": str(persona), "text": "안녕하세요"},
@@ -95,7 +99,7 @@ def test_post_rejects_blank_text(client: TestClient) -> None:
 
 
 def test_room_state_reflects_activity(client: TestClient) -> None:
-    room = uuid4()
+    room = live_room(client)
     headers = _auth_header()
 
     before = client.get(f"/rooms/{room}/state", headers=headers).json()
