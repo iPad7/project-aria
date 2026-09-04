@@ -82,17 +82,24 @@
 
 idle이 사연을 읽는 흐름은 Kafka가 아니라 **동기 읽기 포트**로 한다.
 
-- **`StoryFeedPort`는 `common/story_feed.py`에 둔다**: `claim_next_pending(persona_id) -> PendingStory | None`, `mark_done(story_id)`. 둘 다 async.
-- `community`가 어댑터로 구현(Story 소유·상태 전이 `pending→reading→done`). **배선은 합성 루트 `aria/app.py`**.
+- **`StoryFeedPort`는 `common/story_feed.py`에 둔다**: `claim_next_pending(persona_id) -> PendingStory | None`, `mark_done(story_id)`, `release(story_id)`. 전부 async.
+- `community`가 어댑터로 구현(Story 소유·상태 전이 `pending→reading→done`).
+- **소비자는 idle 워커이고, 배선도 거기서 한다**(`aria/workers/idle.py`). 이전 판은 "배선은 `aria/app.py`"라고 적어 두었으나, 이 포트를 쓰는 것은 api가 아니라 idle 루프다 — 합성 루트가 여럿이고 각자 필요한 것을 조립한다.
 - 근거: 사연은 저볼륨이고 "다음 pending 하나 claim"이 이벤트 큐보다 자연스러움. 게시판 쓰기는 community, 낭독 소비는 chat이 포트로.
 
 > **포트를 소비자(chat) 쪽에 두지 않는 이유.** 독립성 계약은 **양방향**이다 — 포트를 `chat.application`에 두면 구현자인 community가 그것을 import해야 하고, 그 순간 `community ↛ chat`이 깨진다(import-linter로 실측 확인). 그래서 계약이 양쪽 밖, 즉 커널에 산다. `EventBusPort`와 같은 자리이며 "컨텍스트 간 경유는 `common`(이벤트/포트)"이라는 규약 그대로다.
 
-> **합성 루트는 `common`이 아니라 `aria/app.py`다.** common은 컨텍스트를 import할 수 없으므로(`common-kernel-purity`) 거기서 조립할 수 없다.
+> **합성 루트는 `common`이 아니다.** common은 컨텍스트를 import할 수 없으므로(`common-kernel-purity`) 거기서 조립할 수 없다. 지금 합성 루트는 셋이다 — `aria/app.py`(api) · `aria/workers/generation.py` · `aria/workers/idle.py`. 각자 자기가 쓰는 포트만 배선한다.
 
 > **DTO는 community의 `Story`가 아니다.** 도메인 객체를 그대로 넘기면 chat이 community 타입을 알게 된다. 낭독에 필요한 것만 담은 `PendingStory`를 common에 두고 어댑터가 변환한다 — `PersonaLLMPort`가 `Message`/`LLMResult`를 두고 OpenAI 타입과 매핑하는 것과 같다.
 
 > **claim은 원자적이어야 한다.** 인스턴스가 여럿이면 같은 사연을 두 번 읽을 수 있다. `SELECT … FOR UPDATE SKIP LOCKED LIMIT 1` 후 상태 전이(표준 큐 claim 패턴). `(persona_id, status)` 인덱스가 이를 받친다.
+
+> **claim은 조회가 아니라 소비다 — 그래서 `release`가 필요하다.** 사연을 집은 뒤 발행에 실패하면 그 사연은 읽히지도 않은 채 `reading`에 갇힌다(시청자가 남긴 글이 조용히 사라진다). 실패 시 `reading → pending`으로 되돌린다. 같은 이유로 **idle 워커는 방별 락을 사연 claim보다 먼저 잡는다**: `ResponseCoordinator`가 나중에 중복 발화를 걸러 주지만, 그때는 이미 사연이 큐에서 빠져나온 뒤다.
+
+> ⚠️ **`done`은 지금 "발행됐다"는 뜻이다.** 진짜 낭독 완료를 아는 것은 응답을 내보낸 generation-worker인데, 그 워커는 사연도 DB도 모른다(C-4의 경계). 그래서 idle 워커가 요청을 발행한 직후 `done`으로 옮긴다. 대가: 워커가 실패해 DLQ로 가면 읽히지 않은 사연이 done이 된다. 표시하지 않으면 읽은 사연이 전부 `reading`에 남아 게시판이 영원히 "낭독 중"으로 보이므로, 둘 중 덜 나쁜 쪽을 골랐다. 진짜 완료 신호는 미디어 송출이 붙어 "다 읽었다"가 정의될 때 생긴다.
+>
+> 프로세스가 통째로 죽어 `release`도 `mark_done`도 못 부른 사연은 `reading`에 남는다. 타임아웃 청소는 아직 없다 — C-4-2의 claim TTL과 같은 성격의 문제라 함께 다룬다.
 
 ---
 

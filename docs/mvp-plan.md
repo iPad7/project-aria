@@ -35,7 +35,7 @@
 
 - [ ] 댓글 선별 → `PersonaLLMPort` 호출 → 응답 — 호출·응답 경로는 실추론까지 배선 완료, **선별(FR-GEN-1·2) 미구현**. C-4-1에서 생성이 generation-worker로 빠졌다(api는 요청만 발행, 응답은 Redis pub/sub으로 흐름)
 - [x] inference 어댑터 + OpenAI fallback (포트 뒤) — `OpenAICompatLLM`(#23) · `FallbackPersonaLLM`(#32). 기본값은 `stub`이라 키 없는 로컬·CI는 그대로 통과
-- [ ] idle 자동 진행(사연·자율발화) — activity tracker 있음, story feed 미구현
+- [x] idle 자동 진행(사연·자율발화, FR-IDLE-1·2·3) — idle 워커가 라이브 방을 훑어 사연을 읽거나 자율발화한다. **FR-STATION-4 → FR-IDLE-2 사슬 연결됨** — `StoryFeedPort`(#42)가 드디어 소비자를 얻었다
 
 ### Phase 3 — 미디어 송출 (서버합성 HLS)
 

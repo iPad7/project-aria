@@ -48,3 +48,15 @@ class StoryFeedPort(Protocol):
     async def mark_done(self, story_id: UUID) -> None:
         """낭독 완료(reading → done). 이미 done이면 아무 일도 하지 않는다."""
         ...
+
+    async def release(self, story_id: UUID) -> None:
+        """선점을 되돌린다(reading → pending). 낭독에 실패했을 때 부른다.
+
+        **이게 없으면 claim한 사연이 영원히 `reading`에 갇힌다.** 생성이 실패하거나
+        응답 슬롯을 못 잡으면 사연은 이미 큐에서 빠져나온 뒤인데 읽히지도 않은
+        상태가 된다 — 시청자가 남긴 사연이 조용히 사라지는 셈이다.
+
+        이미 `done`인 사연은 되돌리지 않는다. 읽고 나서 뒤늦게 도착한 실패 처리가
+        끝난 사연을 대기열에 다시 넣으면 같은 사연을 두 번 읽는다.
+        """
+        ...

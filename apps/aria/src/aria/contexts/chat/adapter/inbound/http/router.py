@@ -16,6 +16,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, status
 
 from aria.common.auth import Principal, get_current_principal, require_staff
+from aria.common.config import settings
 from aria.contexts.chat.adapter.inbound.deps import (
     get_activity_tracker,
     get_chat_service,
@@ -34,9 +35,6 @@ from aria.contexts.chat.application.port.out.activity import ActivityTracker
 from aria.contexts.chat.application.room import MAX_PAGE_SIZE, RoomService
 from aria.contexts.chat.application.service import ChatOrchestrationService
 from aria.contexts.chat.domain.room import Room, RoomStatus
-
-# 레거시 ActivityManager의 기본 idle 임계값(초).
-_DEFAULT_IDLE_THRESHOLD = 6.0
 
 router = APIRouter(prefix="/rooms", tags=["chat"])
 
@@ -182,6 +180,6 @@ async def room_state(
     activity: Annotated[ActivityTracker, Depends(get_activity_tracker)],
 ) -> RoomStateResponse:
     return RoomStateResponse(
-        idle=await activity.is_idle(room_id, _DEFAULT_IDLE_THRESHOLD),
+        idle=await activity.is_idle(room_id, settings.idle_threshold_seconds),
         seconds_since_last=await activity.seconds_since_last(room_id),
     )

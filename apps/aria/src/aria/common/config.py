@@ -26,6 +26,14 @@ class Settings(BaseSettings):
     # or a redelivery arriving after expiry slips through as a duplicate reply.
     dedup_ttl_seconds: int = 3600
 
+    # Idle progress (FR-IDLE). Legacy used a 6s silence threshold.
+    idle_threshold_seconds: float = 6.0
+    # Must be shorter than the threshold, or the loop keeps missing idle windows.
+    idle_tick_seconds: float = 3.0
+    # Rooms examined per tick. Parallelism and sharding stay out until load is
+    # measured -- the same call as the deferred WS subscription sharing.
+    idle_rooms_per_tick: int = 50
+
     # app/inference boundary: persona_id -> inference serving base URL.
     # Empty -> OpenAI fallback behind PersonaLLMPort.
     inference_base_urls: dict[str, str] = {}

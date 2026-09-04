@@ -40,10 +40,11 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
 
-  # generation-worker는 아직 서비스로 두지 않는다 — Dockerfile이 없어서(api도 마찬가지로
+  # 워커들(generation·idle)은 아직 서비스로 두지 않는다 — Dockerfile이 없어서(api도 마찬가지로
   # 로컬에서 uvicorn으로 띄운다). 지금은 호스트에서 직접 돌린다:
   #
   #   uv run faststream run aria.workers.generation:app
+  #   uv run python -m aria.workers.idle
   #
   # 이미지가 확정되면 api와 **같은 이미지에 진입점만 다른** 서비스로 들어온다
   # (docs/architecture.md). 그때 replicas를 늘리는 것이 곧 수평 확장이다 — 같은

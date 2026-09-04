@@ -59,6 +59,10 @@ flowchart LR
 
 > **generation-worker는 실체가 있다**(C-4-1). 진입점 `aria/workers/generation.py`, 실행은 `uv run faststream run aria.workers.generation:app`. api와 같은 이미지에 진입점만 다르며, 같은 consumer group 안에서 복제본을 늘리는 것이 곧 수평 확장이다. **합성 루트가 둘**인 셈인데(`app.py`와 여기), 둘 다 common과 컨텍스트를 함께 아는 자리라 common 밖 최상위에 둔다. media-worker는 아직 없다.
 >
+> **idle 워커가 셋째 진입점이다**(`aria/workers/idle.py`, 실행 `uv run python -m aria.workers.idle`). 무채팅이 지속되면 사연을 읽거나 자율발화한다(FR-IDLE). FastStream은 메시지가 와야 깨어나므로 generation-worker에 합치지 않았다 — idle은 정반대로 "아무 일도 없을 때" 도는 타이머다.
+>
+> **이 워커는 DB를 안다**(방 목록·사연). "워커는 DB를 모른다"는 generation-worker의 규칙이고, idle 워커는 생성을 하지 않고 **요청만 발행**하므로 그 경계와 충돌하지 않는다.
+
 > **수평 확장은 실측했다**(C-4-2). 실제 Kafka에서 워커 2인스턴스가 3개 파티션을 나눠 갖고 30건을 각각 23/7 처리 — 합계 30, 중복 0. 배달 보증(토픽별 ack·`msg_id` claim·DLQ)은 어댑터가 입히고 `ResponseGenerationService`는 그런 게 있는 줄 모른다. 정책은 `docs/events.md`.
 | **payments 서비스** | Toss 결제 saga · outbox | 별도(별도 DB) | 경계가 이미 async, 보안/장애 격리 |
 | **inference 서빙** | vLLM 멀티-LoRA | 별도 repo(GPU) | GPU 하드 경계 |
