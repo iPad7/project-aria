@@ -18,16 +18,20 @@ from aria.common.auth import Principal, get_current_principal
 from aria.common.errors import NotFoundError
 from aria.contexts.community.adapter.inbound.http.deps import (
     get_like_service,
+    get_ranking_service,
     get_story_service,
 )
 from aria.contexts.community.adapter.inbound.http.schema import (
     LikeCountResponse,
     StoryResponse,
     SubmitStoryRequest,
+    SupporterResponse,
 )
 from aria.contexts.community.application.service import (
     MAX_PAGE_SIZE,
+    MAX_RANKING_SIZE,
     LikeService,
+    RankingService,
     StoryService,
 )
 from aria.contexts.community.domain.model import Story
@@ -129,3 +133,32 @@ def my_like(
     """내가 눌렀는지. 눌렀으면 204, 아니면 404."""
     if not service.liked_by(persona_id, principal.user_id):
         raise NotFoundError("좋아요를 누르지 않았습니다", code="like_not_found")
+
+
+# 열혈순위. 좋아요와 같은 이유로 URL은 페르소나에 매달리고 소유 컨텍스트는 community다.
+ranking_router = APIRouter(prefix="/personas/{persona_id}/ranking", tags=["community"])
+
+
+@ranking_router.get("", response_model=list[SupporterResponse])
+def top_supporters(
+    persona_id: UUID,
+    service: Annotated[RankingService, Depends(get_ranking_service)],
+    limit: int = Query(default=10, ge=1, le=MAX_RANKING_SIZE),
+) -> list[SupporterResponse]:
+    """후원자 순위(FR-STATION-6). 공개 — 비로그인 시청자도 방송국을 본다.
+
+    후원이 없거나 페르소나가 없으면 빈 리스트다. 404를 내지 않는 이유는 랭킹이
+    페르소나의 존재를 판정하는 자리가 아니기 때문이다 — 그건 프로필 조회의 일이고,
+    여기서 하려면 community가 persona를 알아야 한다.
+    """
+    supporters = service.top_supporters(persona_id, limit=limit)
+    return [
+        SupporterResponse(
+            rank=s.rank,
+            donor_id=s.donor_id,
+            display_name=s.display_name,
+            total_amount=s.total_amount,
+            donation_count=s.donation_count,
+        )
+        for s in supporters
+    ]

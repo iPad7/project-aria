@@ -10,13 +10,19 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import Depends
+from redis import Redis as SyncRedis
 from sqlmodel import Session
 
 from aria.common.db import get_session
+from aria.common.redis import get_sync_redis
+from aria.contexts.wallet.adapter.outbound.cache.donation_ranking import (
+    CachedDonationRepository,
+)
 from aria.contexts.wallet.adapter.outbound.persistence.repository import (
     SqlModelDonationRepository,
     SqlModelWalletRepository,
 )
+from aria.contexts.wallet.adapter.outbound.ranking import WalletDonationRanking
 from aria.contexts.wallet.adapter.outbound.superchat import WalletSuperchat
 from aria.contexts.wallet.application.service import DonationService
 
@@ -28,4 +34,14 @@ def get_superchat(
     wallets = SqlModelWalletRepository(session)
     return WalletSuperchat(
         DonationService(wallets, SqlModelDonationRepository(session)), wallets
+    )
+
+
+def get_donation_ranking(
+    session: Annotated[Session, Depends(get_session)],
+    redis: Annotated[SyncRedis, Depends(get_sync_redis)],
+) -> WalletDonationRanking:
+    # 캐시 데코레이터로 감싼다 — 어댑터도 소비자도 캐시의 존재를 모른다.
+    return WalletDonationRanking(
+        CachedDonationRepository(SqlModelDonationRepository(session), redis)
     )

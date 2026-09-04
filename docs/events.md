@@ -93,6 +93,24 @@ idle이 사연을 읽는 흐름은 Kafka가 아니라 **동기 읽기 포트**�
 
 ---
 
+## 열혈순위 — **동기 읽기 포트 둘로 확정** (이벤트 아님)
+
+방송국은 그 페르소나의 후원자 순위를 보여준다(FR-STATION-6). 금액은 `wallet`이, 표시명은 `identity`가, 화면은 `community`가 갖고 있다. 셋을 잇는 것도 Kafka가 아니라 **동기 포트**다.
+
+- **`DonationRankingPort`는 `common/ranking.py`에**: `top_donors(persona_id, *, limit) -> list[DonorRank]`. `wallet`이 구현(`WalletDonationRanking`).
+- **`UserDirectoryPort`는 `common/user_directory.py`에**: `display_names(user_ids) -> dict[UUID, str]`. `identity`가 구현(`IdentityUserDirectory`).
+- `community`의 `RankingService`가 둘을 합쳐 순위표를 만든다. **배선은 합성 루트 `aria/app.py`** — FastAPI `dependency_overrides`로 community가 선언한 자리에 두 구현을 꽂는다.
+
+> **왜 이벤트가 아닌가.** 순위는 조회 시점의 질문이지 통지할 사건이 아니다. 이벤트로 하려면 community가 read model 테이블을 두고 후원 이벤트로 갱신해야 하는데, 그건 갱신 누락이라는 정합성 문제를 새로 만든다(`docs/data-model.md`). 집계는 인덱스 하나로 충분하고, 비용은 어댑터 쪽 TTL 캐시가 받는다.
+
+> **왜 이 포트들만 sync인가.** `StoryFeedPort`·`SuperchatPort`는 소비자가 chat(async)이라 async였다. 이 둘의 소비자는 community의 HTTP 핸들러이고 그건 sync 함수다 — FastAPI가 스레드풀에서 돌리므로 블로킹 DB 호출이 이벤트 루프를 막지 않는다. async로 두면 구현이 `anyio.to_thread`로 sync 리포지토리를 다시 감싸야 하는데 얻는 게 없다. **포트의 색은 소비자가 정한다.**
+
+> **이름 조회가 벌크인 이유.** 순위 한 줄마다 조회하면 N+1이다. 이름을 붙이자고 랭킹을 20배 느리게 만들 수 없으므로 계약 자체를 여러 건 단위로 못박았다.
+
+> **탈퇴한 후원자는 순위에 남되 이름이 없다.** 이름이 없다고 줄을 빼면 아래 순위가 한 칸씩 올라가 실제 순위가 아니게 된다. 포트는 "찾은 것만" 돌려주고, 무엇을 대신 보여줄지는 화면이 정한다.
+
+---
+
 ## 선점은 두 가지를 함께 해야 성립한다
 
 `ResponseCoordinator`(Redis)의 우선순위 락은 **새 생성을 못 시작하게 막는 것**(`try_acquire`)과 **이미 돌던 생성의 결과를 버리는 것**(`still_holds`)이 둘 다 있어야 의미가 있다.
@@ -106,6 +124,8 @@ idle이 사연을 읽는 흐름은 Kafka가 아니라 **동기 읽기 포트**�
 - `EventBusPort`(`aria.common.eventbus`) — Kafka publish(FastStream 어댑터). 도메인/애플리케이션은 Kafka를 모름. **어댑터 미구현** — 워커 진입점과 함께(C-4).
 - `StoryFeedPort`(`aria.common.story_feed`) — 사연 소비. community가 구현, chat이 소비, `aria/app.py`가 배선.
 - `SuperchatPort`(`aria.common.superchat`) — 후원 결제. wallet이 구현, chat이 소비, `aria/app.py`가 배선.
+- `DonationRankingPort`(`aria.common.ranking`) — 열혈순위 집계. wallet이 구현, community가 소비, `aria/app.py`가 배선.
+- `UserDirectoryPort`(`aria.common.user_directory`) — 표시명 벌크 조회. identity가 구현, community가 소비, `aria/app.py`가 배선.
 
 ## 미확정
 
