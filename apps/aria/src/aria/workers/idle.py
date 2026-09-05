@@ -26,6 +26,7 @@ from sqlmodel import Session
 from aria.common.config import settings
 from aria.common.db import engine
 from aria.common.kafka import KafkaEventBus, get_broker
+from aria.common.logging import configure_logging
 from aria.common.redis import get_redis
 from aria.contexts.chat.adapter.outbound.clustering.lexical import (
     LexicalTopicClusterer,
@@ -49,7 +50,7 @@ from aria.contexts.community.adapter.outbound.persistence.repository import (
 )
 from aria.contexts.community.adapter.outbound.story_feed import CommunityStoryFeed
 
-logging.basicConfig(level=logging.INFO)
+configure_logging()
 logger = logging.getLogger(__name__)
 
 

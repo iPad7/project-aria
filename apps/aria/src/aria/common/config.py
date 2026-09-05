@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     # Long enough not to cut a demo short, short enough not to run all night.
     room_abandon_seconds: float = 1800.0
 
+    # Root log level for every entrypoint (api, generation-worker, progress-worker).
+    log_level: str = "INFO"
+
     # app/inference boundary: persona_id -> inference serving base URL.
     # Empty -> OpenAI fallback behind PersonaLLMPort.
     inference_base_urls: dict[str, str] = {}
