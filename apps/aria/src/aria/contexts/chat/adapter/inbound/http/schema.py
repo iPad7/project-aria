@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from uuid import UUID
 
 from pydantic import Field
@@ -64,6 +65,8 @@ class RoomResponse(SchemaBase):
     description: str | None
     thumbnail_url: str | None
     status: str
+    # 끝난 방송만 값이 있다. 아카이브·목록에서 "언제 끝났나"를 답한다.
+    closed_at: datetime | None
 
 
 class RoomStateResponse(SchemaBase):

@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from uuid import UUID
 
 import anyio.to_thread
@@ -19,6 +20,17 @@ from aria.contexts.chat.adapter.outbound.persistence.model import RoomTable
 from aria.contexts.chat.domain.room import Room, RoomStatus
 
 
+def _aware(value: datetime | None) -> datetime | None:
+    """DB에서 온 시각을 UTC 기준으로 맞춘다.
+
+    Postgres는 tz를 붙여 주지만 SQLite(테스트)는 naive로 돌려준다. 그대로 두면 방치
+    판정에서 aware와 빼다가 `TypeError`가 난다 — 저장은 언제나 UTC이므로 여기서 붙인다.
+    """
+    if value is None or value.tzinfo is not None:
+        return value
+    return value.replace(tzinfo=UTC)
+
+
 def _to_domain(row: RoomTable) -> Room:
     return Room(
         id=row.id,
@@ -28,6 +40,8 @@ def _to_domain(row: RoomTable) -> Room:
         description=row.description,
         thumbnail_url=row.thumbnail_url,
         status=RoomStatus(row.status),
+        created_at=_aware(row.created_at),
+        closed_at=_aware(row.closed_at),
     )
 
 
@@ -87,6 +101,7 @@ class SqlModelRoomRepository:
         row.name = room.name
         row.description = room.description
         row.thumbnail_url = room.thumbnail_url
+        row.closed_at = room.closed_at
         self._session.add(row)
         self._commit_guarding_live_uniqueness()
 
