@@ -34,11 +34,13 @@ from aria.contexts.chat.adapter.outbound.persistence.repository import (
     SqlModelRoomRepository,
 )
 from aria.contexts.chat.adapter.outbound.redis.activity import RedisActivityTracker
+from aria.contexts.chat.adapter.outbound.redis.audience import RedisRoomAudience
 from aria.contexts.chat.adapter.outbound.redis.candidates import RedisCandidateBuffer
 from aria.contexts.chat.adapter.outbound.redis.coordinator import (
     RedisResponseCoordinator,
 )
 from aria.contexts.chat.adapter.outbound.redis.idle_lock import RedisIdleLock
+from aria.contexts.chat.application.abandon import AbandonedRoomCloser
 from aria.contexts.chat.application.generation import GenerationRequestPublisher
 from aria.contexts.chat.application.progress import ProgressService
 from aria.contexts.chat.application.room import RoomService
@@ -51,12 +53,16 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-async def tick(rooms: RoomService, progress: ProgressService) -> int:
+async def tick(
+    rooms: RoomService, progress: ProgressService, closer: AbandonedRoomCloser
+) -> int:
     """살아 있는 방을 한 바퀴 돌며 필요한 곳을 진행시킨다. 진행시킨 방 수를 돌려준다.
 
     순차로 돈다. 병렬화하면 LLM 호출이 한꺼번에 터질 수 있고, 샤딩은 인스턴스가
     여럿일 때 이야기다 — 둘 다 부하가 실측되기 전이라 보류한다. 대신 상한에 걸리는지를
     로그로 남겨 실측 근거를 만든다.
+
+    정리를 진행보다 **먼저** 한다 — 방금 끝낸 방을 같은 틱에 또 진행시키지 않는다.
     """
     live = await rooms.list_live(limit=settings.idle_rooms_per_tick)
     if len(live) == settings.idle_rooms_per_tick:
@@ -68,6 +74,8 @@ async def tick(rooms: RoomService, progress: ProgressService) -> int:
     advanced = 0
     for room in live:
         try:
+            if await closer.close_if_abandoned(room):
+                continue
             outcome = await progress.advance(room.id, room.persona_id)
             if outcome is not None:
                 advanced += 1
@@ -92,25 +100,35 @@ async def run() -> None:
     # 세션 하나를 워커 수명 동안 쓴다. 요청-응답이 아니라 긴 루프라 요청마다
     # 세션을 여는 FastAPI의 방식이 맞지 않는다.
     with Session(engine) as session:
+        activity = RedisActivityTracker(redis)
+        audience = RedisRoomAudience(redis)
         rooms = RoomService(SqlModelRoomRepository(session))
         progress = ProgressService(
-            activity=RedisActivityTracker(redis),
+            activity=activity,
             lock=RedisIdleLock(redis),
             stories=CommunityStoryFeed(SqlModelStoryRepository(session)),
             generation=GenerationRequestPublisher(KafkaEventBus(broker)),
             candidates=RedisCandidateBuffer(redis),
             clusterer=LexicalTopicClusterer(),
             coordinator=RedisResponseCoordinator(redis),
+            audience=audience,
             threshold_seconds=settings.idle_threshold_seconds,
         )
+        closer = AbandonedRoomCloser(
+            rooms,
+            activity,
+            audience,
+            abandon_seconds=settings.room_abandon_seconds,
+        )
         logger.info(
-            "진행 루프 시작 — %.1fs마다 최대 %d개 방",
+            "진행 루프 시작 — %.1fs마다 최대 %d개 방, 방치 %.0f분이면 종료",
             settings.idle_tick_seconds,
             settings.idle_rooms_per_tick,
+            settings.room_abandon_seconds / 60,
         )
         while True:
             try:
-                await tick(rooms, progress)
+                await tick(rooms, progress, closer)
             except Exception:
                 # 루프 자체는 죽지 않는다 — DB나 브로커가 잠깐 흔들려도 다음 틱에 회복한다.
                 logger.exception("진행 틱 실패 — 다음 틱에 재시도한다")

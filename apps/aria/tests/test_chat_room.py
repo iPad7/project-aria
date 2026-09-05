@@ -74,6 +74,19 @@ def test_pending_room_can_be_finished_without_going_live() -> None:
     assert room.status is RoomStatus.FINISHED
 
 
+def test_finishing_records_when_the_broadcast_ended() -> None:
+    """종료 경로가 둘(운영자의 finish, 방치 정리)이라 도메인이 직접 찍는다.
+
+    호출자에게 맡기면 한쪽이 빠뜨리고, 그러면 "언제 끝났나"를 답할 수 없는 방이 생긴다.
+    """
+    room = _room(RoomStatus.LIVE)
+    assert room.closed_at is None
+
+    room.transition_to(RoomStatus.FINISHED)
+
+    assert room.closed_at is not None
+
+
 def test_room_name_cannot_be_blank() -> None:
     with pytest.raises(ValueError):
         Room(persona_id=uuid4(), host_id=uuid4(), name="")
@@ -157,6 +170,17 @@ def test_persona_can_broadcast_again_after_finishing(client: TestClient) -> None
     res = client.post(f"/rooms/{_open(client, persona)}/live", headers=staff_headers())
 
     assert res.status_code == 200
+
+
+def test_finishing_a_broadcast_persists_when_it_ended(client: TestClient) -> None:
+    # 도메인이 찍은 값이 실제로 저장되고 다시 읽히는지 — 컬럼 하나가 빠지면 조용히 사라진다.
+    room_id = _open(client, uuid4())
+    client.post(f"/rooms/{room_id}/live", headers=staff_headers())
+    assert client.get(f"/rooms/{room_id}").json()["closed_at"] is None
+
+    client.post(f"/rooms/{room_id}/finish", headers=staff_headers())
+
+    assert client.get(f"/rooms/{room_id}").json()["closed_at"] is not None
 
 
 def test_finished_broadcast_cannot_restart(client: TestClient) -> None:

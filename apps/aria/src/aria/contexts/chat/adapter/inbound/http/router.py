@@ -48,6 +48,7 @@ def _to_room_response(room: Room) -> RoomResponse:
         description=room.description,
         thumbnail_url=room.thumbnail_url,
         status=room.status.value,
+        closed_at=room.closed_at,
     )
 
 

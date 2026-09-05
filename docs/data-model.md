@@ -157,6 +157,7 @@ LIMIT ?
 | description | text | nullable |
 | thumbnail_url | varchar(512) | nullable |
 | status | varchar | default 'pending' — pending/live/finished, index |
+| closed_at | timestamptz | nullable — 방송이 끝난 시각 |
 | created_at / updated_at | timestamptz | `ix_chat_room_status_created` (status, created_at DESC) |
 | — | — | `uq_chat_room_live_persona` **부분 유일**: unique(persona_id) WHERE status='live' |
 
@@ -164,7 +165,9 @@ LIMIT ?
 
 > **상태 전이는 전진만 한다**(`pending → live → finished`, pending에서 바로 finished도 가능). 되돌리기를 허용하면 "끝난 방송이 다시 살아나는" 상태가 생기는데 시청자에게도 정산에도 아카이브에도 설명할 수 없다. 다시 하려면 새 방을 연다.
 
-> **`hls_url`·`closed_at`은 아직 없다.** `hls_url`은 값이 생기는 시점이 미디어 송출이 붙을 때라 그때 함께 넣는다 — 지금 넣으면 영원히 NULL인 컬럼이 된다. 종료 시각은 `updated_at`이 대신하고 있어, 별도 컬럼이 필요해지는 근거가 생기면 그때 넣는다.
+> **`closed_at`은 `updated_at`으로 갈음할 수 없다.** 처음에는 그렇게 뒀는데, 방을 자동으로 닫는 규칙이 생기면서 "언제 끝났나"가 실제로 필요해졌다 — `updated_at`은 썸네일만 바꿔도 움직이므로 그 답이 되지 못한다. 값은 도메인의 `transition_to(FINISHED)`가 찍는다: 종료 경로가 둘(운영자의 finish, 방치 정리)이라 호출자에게 맡기면 한쪽이 빠뜨린다.
+
+> **`hls_url`은 아직 없다.** 값이 생기는 시점이 미디어 송출이 붙을 때라 그때 함께 넣는다 — 지금 넣으면 영원히 NULL인 컬럼이 된다.
 
 > **방이 생기기 전에는 `room_id`가 아무 UUID나 됐다.** 그래서 존재하지 않는 방/페르소나에 크레딧을 태울 수 있었고, 차감은 진짜로 일어나 `wallet_donation`에 기록까지 남았다. 지금은 채팅·후원·WS가 전부 라이브 방에서만 된다.
 
