@@ -48,3 +48,4 @@ uv run uvicorn aria.app:app --reload  # http://localhost:8000
 - 접속 정보는 `config.Settings` 기본값이 compose와 일치 — 로컬은 `.env` 없이 동작(운영은 `ARIA_*`로 override, `.env.example` 참고)
 - 스키마 변경 시 모델 수정 후 `uv run alembic revision --autogenerate -m "..."` → 생성된 마이그레이션 검토 → `upgrade head` (생성물은 ruff로 자동 정리됨)
 - 테스트는 인메모리 SQLite·fakeredis라 위 인프라 없이 `uv run pytest`로 실행됨
+- 그래서 **실제 브로커·DB를 타야만 보이는 것**(pub/sub 구독 수, Postgres의 tz-aware 시각, Kafka 발행)은 테스트가 못 본다. `uv run python scripts/smoke_lifecycle.py`가 그 부분을 방송 수명주기로 훑는다 — 인프라와 `alembic upgrade head`가 먼저 필요하다(Kafka도 함께 띄울 것)
