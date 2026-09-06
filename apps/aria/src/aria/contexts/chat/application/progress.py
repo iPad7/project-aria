@@ -7,6 +7,9 @@
 있으므로 어차피 한 곳에서 골라야 한다. 나누면 둘이 각자 발행하고 코디네이터가
 하나를 버리는 낭비가 생긴다 — 선별을 도입하며 없애려는 바로 그 문제다.
 
+**듣는 사람이 없으면 스스로 말을 꺼내지 않는다.** 댓글에 답하는 것은 청한 사람이
+있으므로 그대로 하지만, 사연 낭독과 자율발화는 시청자가 0명이면 건너뛴다.
+
 **우선순위: 댓글 > 사연 > 자율발화.** 시청자가 지금 말을 걸고 있으면 그게 먼저이고,
 조용하면 남겨 둔 사연을, 그것도 없으면 혼잣말을 한다. `ChatSource` 의 우선순위 값
 (CHAT=2 > STORY=IDLE=1)과 같은 순서라 값은 바꾸지 않는다 — 여기서 하나만 고르므로
@@ -29,6 +32,7 @@ from uuid import UUID
 from aria.common.story_feed import PendingStory, StoryFeedPort
 from aria.contexts.chat.application.generation import GenerationRequestPublisher
 from aria.contexts.chat.application.port.out.activity import ActivityTracker
+from aria.contexts.chat.application.port.out.audience import RoomAudience
 from aria.contexts.chat.application.port.out.candidates import CandidateBuffer
 from aria.contexts.chat.application.port.out.clustering import TopicClusterer
 from aria.contexts.chat.application.port.out.coordinator import ResponseCoordinator
@@ -83,6 +87,7 @@ class ProgressService:
         candidates: CandidateBuffer,
         clusterer: TopicClusterer,
         coordinator: ResponseCoordinator,
+        audience: RoomAudience,
         *,
         threshold_seconds: float,
     ) -> None:
@@ -93,6 +98,7 @@ class ProgressService:
         self._candidates = candidates
         self._clusterer = clusterer
         self._coordinator = coordinator
+        self._audience = audience
         self._threshold = threshold_seconds
 
     async def advance(self, room_id: UUID, persona_id: UUID) -> Progress | None:
@@ -172,6 +178,15 @@ class ProgressService:
                         topic_count=len(topics),
                     )
                 )
+
+        # **여기부터는 아무도 청하지 않은 발화다.** 듣는 사람이 없으면 하지 않는다.
+        #
+        # 자율발화는 비용만 나가지만 사연은 더 나쁘다 — 낭독은 시청자가 남긴 사연을
+        # `done`으로 소비하므로, 빈 방에서 읽으면 그 사연은 아무에게도 닿지 못한 채
+        # 사라진다. 반면 위의 댓글은 남긴 사람이 있으므로 지금 보고 있지 않더라도
+        # 답한다(재접속하면 방 채널로 받는다).
+        if await self._audience.viewer_count(room_id) == 0:
+            return None
 
         # 채팅이 없으면 조용한 방인지 본다. 방금 답했다면 아직 idle이 아니다.
         if not await self._activity.is_idle(room_id, self._threshold):

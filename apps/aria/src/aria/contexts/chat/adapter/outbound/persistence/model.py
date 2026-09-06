@@ -6,9 +6,10 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import Index, text
+from sqlalchemy import DateTime, Index, text
 from sqlmodel import Field
 
 from aria.common.persistence import TimestampMixin, UUIDMixin
@@ -23,6 +24,9 @@ class RoomTable(UUIDMixin, TimestampMixin, table=True):
     description: str | None = None
     thumbnail_url: str | None = Field(default=None, max_length=512)
     status: str = Field(default="pending", index=True)
+    # 방송이 끝난 시각. `updated_at`으로 갈음하지 않는다 — 그쪽은 썸네일만 바꿔도
+    # 움직이므로 "언제 끝났나"의 답이 되지 못한다.
+    closed_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
 
     __table_args__ = (
         # 한 페르소나는 동시에 하나의 live 방만 가진다. 스트리머가 두 방송을 동시에

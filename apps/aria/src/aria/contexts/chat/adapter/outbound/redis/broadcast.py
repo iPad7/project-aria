@@ -17,7 +17,8 @@ from redis.asyncio import Redis
 from aria.contexts.chat.application.port.out.broadcast import RoomEvent
 
 
-def _channel(room_id: UUID) -> str:
+def room_channel(room_id: UUID) -> str:
+    """방 채널 이름. 시청자 수 어댑터(`audience.py`)가 같은 채널을 세므로 공개한다."""
     return f"chat:room:{room_id}"
 
 
@@ -36,10 +37,10 @@ class RedisRoomBroadcaster:
         self._redis = redis
 
     async def publish(self, room_id: UUID, event: RoomEvent) -> None:
-        await self._redis.publish(_channel(room_id), json.dumps(event))
+        await self._redis.publish(room_channel(room_id), json.dumps(event))
 
     async def subscribe(self, room_id: UUID) -> AsyncIterator[RoomEvent]:
-        channel = _channel(room_id)
+        channel = room_channel(room_id)
         pubsub = self._redis.pubsub()
         await pubsub.subscribe(channel)  # 구독 성립 후 반환 → 이후 발행분은 유실 없음
         return _stream(pubsub, channel)

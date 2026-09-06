@@ -18,6 +18,7 @@ from aria.common.config import settings
 from aria.common.db import engine
 from aria.common.kafka import KafkaEventBus, get_broker
 from aria.common.langfuse_tracing import build_tracing
+from aria.common.logging import configure_logging
 from aria.common.redis import get_redis
 from aria.common.topics import ensure_topics
 from aria.contexts.chat.adapter.inbound.worker import router as worker_router
@@ -45,6 +46,7 @@ from aria.contexts.persona.adapter.outbound.profile import PersonaProfileProvide
 
 
 def create_app() -> FastStream:
+    configure_logging()
     broker = get_broker()
     redis = get_redis()
 

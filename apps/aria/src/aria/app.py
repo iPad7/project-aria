@@ -10,6 +10,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from aria.common.exception_handler import register_exception_handlers
+from aria.common.logging import configure_logging
 from aria.contexts.chat.adapter.inbound import deps as chat_deps
 from aria.contexts.chat.adapter.inbound.http.router import router as chat_router
 from aria.contexts.chat.adapter.inbound.ws.router import router as chat_ws_router
@@ -31,6 +32,7 @@ from aria.contexts.wallet.adapter.inbound.http.router import router as wallet_ro
 
 
 def create_app() -> FastAPI:
+    configure_logging()
     app = FastAPI(title="aria", version="0.1.0")
     register_exception_handlers(app)
     app.include_router(identity_router)

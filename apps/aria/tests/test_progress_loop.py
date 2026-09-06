@@ -1,14 +1,21 @@
 """진행 — 댓글 선별·사연 낭독·자율발화 (FR-GEN-1·2, FR-IDLE-1·2·3).
 
-이 단위의 위험은 넷이다:
+이 단위의 위험은 다섯이다:
 
 1. **사연이 헛되이 소비되는 것.** `claim_next_pending`은 조회가 아니라 상태 전이라,
    claim해 놓고 발행하지 못하면 시청자가 남긴 사연이 읽히지도 않고 사라진다.
 2. **중복 발화.** 워커가 여럿이면 같은 방에 두 번 말을 건다.
 3. **다시 집기.** 진행시킨 방을 다음 틱이 또 집으면 계속 말한다.
 4. **우선순위 뒤집힘.** 시청자가 말을 걸고 있는데 혼잣말을 하는 것.
+5. **빈 방에서의 발화.** 아무도 보지 않는 방에 계속 말을 걸면 비용만 나간다.
+
+대부분의 테스트는 "방송 중이고 보는 사람이 있는" 상황을 다루므로 시청자 수를
+`_Watched` 로 고정한다. 시청자 자체가 주제인 테스트에서는 **진짜 구독으로** 만든다 —
+어댑터가 방 채널의 pub/sub 구독자 수를 그대로 세므로, 거기서도 스텁을 꽂으면 정작
+그 계산을 검증하지 못한다.
 """
 
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
@@ -22,13 +29,17 @@ from aria.contexts.chat.adapter.outbound.clustering.lexical import (
     LexicalTopicClusterer,
 )
 from aria.contexts.chat.adapter.outbound.redis.activity import RedisActivityTracker
+from aria.contexts.chat.adapter.outbound.redis.audience import RedisRoomAudience
+from aria.contexts.chat.adapter.outbound.redis.broadcast import RedisRoomBroadcaster
 from aria.contexts.chat.adapter.outbound.redis.coordinator import (
     RedisResponseCoordinator,
 )
 from aria.contexts.chat.adapter.outbound.redis.idle_lock import RedisIdleLock
+from aria.contexts.chat.application.abandon import AbandonedRoomCloser
 from aria.contexts.chat.application.generation import GenerationRequestPublisher
 from aria.contexts.chat.application.port.out.candidates import CandidateBuffer
 from aria.contexts.chat.application.progress import ProgressService
+from aria.contexts.chat.domain.room import Room, RoomStatus
 from aria.contexts.chat.domain.source import ChatSource
 from aria.contexts.chat.domain.topic import Candidate
 from aria.contexts.community.adapter.outbound.persistence.repository import (
@@ -91,11 +102,26 @@ def _candidate(text: str) -> Candidate:
     return Candidate(message_id=uuid4(), author_id=uuid4(), text=text)
 
 
+class _Watched:
+    """누군가 보고 있는 방. 시청자가 주제가 아닌 테스트의 기본값이다."""
+
+    async def viewer_count(self, room_id: UUID) -> int:
+        return 1
+
+
+class _Empty:
+    """아무도 보지 않는 방."""
+
+    async def viewer_count(self, room_id: UUID) -> int:
+        return 0
+
+
 def _service(
     redis: FakeAsyncRedis,
     stories: _FakeStories,
     bus: object | None = None,
     candidates: CandidateBuffer | None = None,
+    audience: object | None = None,
 ) -> ProgressService:
     return ProgressService(
         activity=RedisActivityTracker(redis),
@@ -105,6 +131,7 @@ def _service(
         candidates=candidates or _MemoryCandidates(),
         clusterer=LexicalTopicClusterer(),
         coordinator=RedisResponseCoordinator(redis),
+        audience=audience or _Watched(),
         threshold_seconds=_THRESHOLD,
     )
 
@@ -334,7 +361,7 @@ class _StubRooms:
     """`RoomService.list_live()` 자리에 꽂는 스텁."""
 
     def __init__(self, *rooms: tuple[UUID, UUID]) -> None:
-        self._rooms = [_StubRoom(rid, pid) for rid, pid in rooms]
+        self._rooms = [_room(rid, pid) for rid, pid in rooms]
         self.asked_limit: int | None = None
 
     async def list_live(self, *, limit: int = 20, offset: int = 0):
@@ -342,10 +369,21 @@ class _StubRooms:
         return self._rooms[:limit]
 
 
-class _StubRoom:
-    def __init__(self, room_id: UUID, persona_id: UUID) -> None:
-        self.id = room_id
-        self.persona_id = persona_id
+def _room(room_id: UUID, persona_id: UUID) -> Room:
+    return Room(
+        id=room_id,
+        persona_id=persona_id,
+        host_id=uuid4(),
+        name="방송",
+        status=RoomStatus.LIVE,
+    )
+
+
+class _NeverCloses:
+    """정리를 하지 않는 정리자 — 진행만 보는 테스트에 꽂는다."""
+
+    async def close_if_abandoned(self, room: Room) -> bool:
+        return False
 
 
 async def test_tick_advances_every_idle_room(redis: FakeAsyncRedis) -> None:
@@ -354,7 +392,11 @@ async def test_tick_advances_every_idle_room(redis: FakeAsyncRedis) -> None:
     rooms = _StubRooms((uuid4(), uuid4()), (uuid4(), uuid4()))
     events = RecordingEventBus()
 
-    assert await tick(rooms, _service(redis, _FakeStories(), events)) == 2
+    advanced = await tick(
+        rooms, _service(redis, _FakeStories(), events), _NeverCloses()
+    )
+
+    assert advanced == 2
     assert len(events.published) == 2
 
 
@@ -381,10 +423,13 @@ async def test_one_failing_room_does_not_stop_the_others(
         candidates=_MemoryCandidates(),
         clusterer=LexicalTopicClusterer(),
         coordinator=RedisResponseCoordinator(redis),
+        audience=_Watched(),
         threshold_seconds=_THRESHOLD,
     )
 
-    advanced = await tick(_StubRooms((doomed, uuid4()), (healthy, uuid4())), service)
+    advanced = await tick(
+        _StubRooms((doomed, uuid4()), (healthy, uuid4())), service, _NeverCloses()
+    )
 
     assert advanced == 1
     assert len(events.published) == 1
@@ -398,7 +443,7 @@ async def test_tick_asks_for_at_most_the_configured_number_of_rooms(
     from aria.workers.idle import tick
 
     rooms = _StubRooms((uuid4(), uuid4()))
-    await tick(rooms, _service(redis, _FakeStories()))
+    await tick(rooms, _service(redis, _FakeStories()), _NeverCloses())
 
     assert rooms.asked_limit == settings.idle_rooms_per_tick
 
@@ -543,3 +588,190 @@ async def test_free_room_proceeds(redis: FakeAsyncRedis) -> None:
     progress = await _service(redis, _FakeStories(_story())).advance(uuid4(), uuid4())
 
     assert progress is not None
+
+
+# --- 듣는 사람이 없으면 말하지 않는가 ---------------------------------------
+#
+# 방 16개가 정리되지 않은 채 남아 분당 160회씩 자율발화하고 있었다. 비용 이전에
+# 제품이 이상하다 — 시청자가 0명인데 떠드는 스트리머는 없다.
+
+
+async def test_empty_room_does_not_talk_to_itself(redis: FakeAsyncRedis) -> None:
+    events = RecordingEventBus()
+    service = _service(redis, _FakeStories(), events, audience=_Empty())
+
+    assert await service.advance(uuid4(), uuid4()) is None
+    assert events.published == []
+
+
+async def test_empty_room_does_not_consume_a_story(redis: FakeAsyncRedis) -> None:
+    """자율발화보다 이쪽이 더 나쁘다.
+
+    낭독은 시청자가 남긴 사연을 `done`으로 소비하므로, 빈 방에서 읽으면 그 사연은
+    아무에게도 닿지 못한 채 사라진다.
+    """
+    stories = _FakeStories(_story())
+
+    assert (
+        await _service(redis, stories, audience=_Empty()).advance(uuid4(), uuid4())
+        is None
+    )
+    assert stories.claims == 0
+
+
+async def test_empty_room_still_answers_comments(redis: FakeAsyncRedis) -> None:
+    """댓글은 청한 사람이 있다 — 지금 보고 있지 않아도 답한다.
+
+    끊었다 재접속하는 순간이 있고, 남긴 댓글이 답을 못 받고 사라지면 그건 유실이다.
+    """
+    service = _service(
+        redis,
+        _FakeStories(),
+        candidates=_MemoryCandidates(_candidate("고백하는 게 맞을까요?")),
+        audience=_Empty(),
+    )
+
+    progress = await service.advance(uuid4(), uuid4())
+
+    assert progress is not None and progress.source is ChatSource.CHAT
+
+
+async def test_viewer_count_is_the_room_channel_subscriber_count(
+    redis: FakeAsyncRedis,
+) -> None:
+    """따로 명부를 두지 않는 이유 — 구독 수가 이미 정확한 답이다.
+
+    heartbeat 방식이면 프로세스가 죽을 때 유령 시청자가 남는데, 그건 이 단위가
+    없애려는 문제와 같은 종류다.
+    """
+    audience = RedisRoomAudience(redis)
+    room, other = uuid4(), uuid4()
+
+    assert await audience.viewer_count(room) == 0
+
+    broadcaster = RedisRoomBroadcaster(redis)
+    stream = await broadcaster.subscribe(room)
+    assert await audience.viewer_count(room) == 1
+    assert await audience.viewer_count(other) == 0  # 다른 방은 영향 없다
+
+    # 세는 구독이 방송이 흐르는 그 구독임을 확인한다. 겸사겸사 스트림을 **시작**시킨다
+    # — 시작하지 않은 async generator는 `aclose()`가 finally(구독 해제)를 돌리지 않는다.
+    await broadcaster.publish(room, {"type": "ping"})
+    assert await anext(stream) == {"type": "ping"}
+
+    await stream.aclose()
+    assert await audience.viewer_count(room) == 0  # 나가면 곧바로 0이다
+
+
+async def test_a_watched_room_keeps_talking(redis: FakeAsyncRedis) -> None:
+    # 대조군 — 진짜 구독이 하나 있으면 그전과 똑같이 자율발화한다.
+    room = uuid4()
+    stream = await RedisRoomBroadcaster(redis).subscribe(room)
+    service = _service(redis, _FakeStories(), audience=RedisRoomAudience(redis))
+
+    progress = await service.advance(room, uuid4())
+
+    assert progress is not None and progress.source is ChatSource.IDLE
+    await stream.aclose()
+
+
+# --- 방치된 방은 스스로 끝나는가 --------------------------------------------
+#
+# 방을 여는 사람은 있는데 끝내는 사람이 아무도 없었다. 시청자 검사로 비용은 멈추지만,
+# 방은 여전히 목록에 남고 그 페르소나는 새 방송을 열지 못한다(live 부분 유일 인덱스).
+
+
+class _RecordingRooms:
+    """`RoomService.transition()` 만 쓰는 정리자에 꽂는 스텁."""
+
+    def __init__(self) -> None:
+        self.finished: list[UUID] = []
+
+    async def transition(self, room_id: UUID, status: RoomStatus):
+        assert status is RoomStatus.FINISHED
+        self.finished.append(room_id)
+
+
+def _closer(
+    redis: FakeAsyncRedis,
+    rooms: _RecordingRooms,
+    audience: object,
+    *,
+    abandon_seconds: float = 1800.0,
+) -> AbandonedRoomCloser:
+    return AbandonedRoomCloser(
+        rooms,  # type: ignore[arg-type]
+        RedisActivityTracker(redis),
+        audience,  # type: ignore[arg-type]
+        abandon_seconds=abandon_seconds,
+    )
+
+
+async def test_a_long_silent_empty_room_is_closed(redis: FakeAsyncRedis) -> None:
+    rooms = _RecordingRooms()
+    room = _room(uuid4(), uuid4())
+    room.created_at = datetime.now(UTC) - timedelta(hours=2)
+
+    assert await _closer(redis, rooms, _Empty()).close_if_abandoned(room) is True
+    assert rooms.finished == [room.id]
+
+
+async def test_a_watched_room_is_never_closed(redis: FakeAsyncRedis) -> None:
+    """침묵만 보면 위험하다.
+
+    생성이 계속 실패해 진행이 성사되지 않는 방은 사람이 보고 있어도 조용해 보인다 —
+    그러면 시청자 앞에서 방송이 꺼진다.
+    """
+    rooms = _RecordingRooms()
+    room = _room(uuid4(), uuid4())
+    room.created_at = datetime.now(UTC) - timedelta(days=1)
+
+    assert await _closer(redis, rooms, _Watched()).close_if_abandoned(room) is False
+    assert rooms.finished == []
+
+
+async def test_a_fresh_room_is_not_closed(redis: FakeAsyncRedis) -> None:
+    """활동 기록이 아직 없는 방을 "오래 조용했다"고 오해하면 안 된다.
+
+    개설 직후에는 아무도 말하지 않았으므로 활동 키가 없다 — 그것을 침묵 무한대로
+    읽으면 열자마자 닫힌다.
+    """
+    rooms = _RecordingRooms()
+
+    closed = await _closer(redis, rooms, _Empty()).close_if_abandoned(
+        _room(uuid4(), uuid4())
+    )
+
+    assert closed is False
+    assert rooms.finished == []
+
+
+async def test_recent_activity_keeps_an_empty_room_open(redis: FakeAsyncRedis) -> None:
+    # 방금까지 대화가 있었다면 잠깐 아무도 없어도 닫지 않는다.
+    rooms = _RecordingRooms()
+    room = _room(uuid4(), uuid4())
+    room.created_at = datetime.now(UTC) - timedelta(days=1)
+    await RedisActivityTracker(redis).touch(room.id)
+
+    assert await _closer(redis, rooms, _Empty()).close_if_abandoned(room) is False
+
+
+async def test_closing_a_room_stops_the_tick_from_advancing_it(
+    redis: FakeAsyncRedis,
+) -> None:
+    # 정리가 진행보다 앞이어야 하는 이유 — 방금 끝낸 방에 같은 틱이 또 말을 건다.
+    from aria.workers.idle import tick
+
+    room_id = uuid4()
+    rooms = _StubRooms((room_id, uuid4()))
+    rooms._rooms[0].created_at = datetime.now(UTC) - timedelta(hours=2)
+    events = RecordingEventBus()
+
+    advanced = await tick(
+        rooms,
+        _service(redis, _FakeStories(), events),
+        _closer(redis, _RecordingRooms(), _Empty()),
+    )
+
+    assert advanced == 0
+    assert events.published == []

@@ -46,6 +46,12 @@ class Settings(BaseSettings):
     # Rooms examined per tick. Parallelism and sharding stay out until load is
     # measured -- the same call as the deferred WS subscription sharing.
     idle_rooms_per_tick: int = 50
+    # A live room nobody watches and nothing happens in gets closed after this long.
+    # Long enough not to cut a demo short, short enough not to run all night.
+    room_abandon_seconds: float = 1800.0
+
+    # Root log level for every entrypoint (api, generation-worker, progress-worker).
+    log_level: str = "INFO"
 
     # app/inference boundary: persona_id -> inference serving base URL.
     # Empty -> OpenAI fallback behind PersonaLLMPort.

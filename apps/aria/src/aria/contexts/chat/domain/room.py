@@ -12,6 +12,7 @@ import하지 않는다.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from enum import Enum
 from uuid import UUID
 
@@ -55,6 +56,11 @@ class Room(Entity):
     description: str | None = None
     thumbnail_url: str | None = Field(default=None, max_length=512)
     status: RoomStatus = RoomStatus.PENDING
+    # 개설 시각. 방치 판정의 바닥이다 — 활동 기록이 아직 없는 방을 "오래 조용했다"고
+    # 오해하지 않으려면 언제부터 셀지가 필요하다.
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    # 방송이 끝난 시각. 끝나지 않았으면 None.
+    closed_at: datetime | None = None
 
     def transition_to(self, status: RoomStatus) -> None:
         """상태를 옮긴다. 허용되지 않는 전이면 `InvalidRoomTransition`.
@@ -68,6 +74,21 @@ class Room(Entity):
                 f"{self.status.value} → {status.value} 전이는 허용되지 않습니다"
             )
         self.status = status
+        if status is RoomStatus.FINISHED:
+            # 여기서 찍는다 — 종료 경로가 둘(운영자의 finish, 방치 정리)이라 호출자에
+            # 맡기면 한쪽이 빠뜨린다. 전이가 한 번뿐이므로(전진만) 덮어쓸 일도 없다.
+            self.closed_at = datetime.now(UTC)
+
+    def silent_for(self, since_last_activity: float | None, *, now: datetime) -> float:
+        """마지막 활동 이후 흐른 시간(초). 활동 기록이 없으면 개설 이후로 센다.
+
+        기록이 없는 경우는 둘인데 둘 다 이 계산이 맞다: 개설 후 아무 일도 없었거나
+        (그러면 개설 이후가 곧 침묵), 활동 키의 TTL이 지났거나(그러면 이미 TTL만큼
+        조용했고 개설은 그보다 앞이다).
+        """
+        if since_last_activity is not None:
+            return since_last_activity
+        return (now - self.created_at).total_seconds()
 
     def is_open_for_chat(self) -> bool:
         """채팅·후원을 받을 수 있는 상태인가. 라이브일 때만이다."""
