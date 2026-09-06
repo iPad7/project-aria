@@ -11,12 +11,14 @@ from sqlmodel import Session, col, select
 from aria.contexts.persona.adapter.outbound.persistence.model import (
     CommunicationStyleTable,
     CoreValueTable,
+    MoralCompassTable,
     PersonaCoreValueTable,
     PersonaTable,
 )
 from aria.contexts.persona.domain.model import (
     CommunicationStyle,
     CoreValue,
+    MoralCompass,
     Persona,
 )
 
@@ -103,6 +105,29 @@ class SqlModelProfileRepository:
         row.question_style = style.question_style
         row.directness = style.directness
         row.empathy_expression = style.empathy_expression
+        self._session.add(row)
+        self._session.commit()
+
+    def get_compass(self, persona_id: UUID) -> MoralCompass | None:
+        row = self._session.get(MoralCompassTable, persona_id)
+        if row is None:
+            return None
+        return MoralCompass(
+            persona_id=row.persona_id,
+            standard=row.standard,
+            rule_adherence=row.rule_adherence,
+            fairness=row.fairness,
+        )
+
+    def set_compass(self, compass: MoralCompass) -> None:
+        row = self._session.get(MoralCompassTable, compass.persona_id)
+        if row is None:
+            row = MoralCompassTable(
+                persona_id=compass.persona_id, standard=compass.standard
+            )
+        row.standard = compass.standard
+        row.rule_adherence = compass.rule_adherence
+        row.fairness = compass.fairness
         self._session.add(row)
         self._session.commit()
 

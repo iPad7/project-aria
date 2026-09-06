@@ -202,8 +202,15 @@ class ResponseGenerationService:
             profile = await self._profiles.profile_of(request.persona_id)
             has_voice = profile is not None and profile.has_voice()
             # #59에서 로그로만 남기던 것이 이제 트레이스 속성이 된다 — "몇 %가
-            # 프로필 없이 도는가"를 셀 수 있다.
-            trace.set_metadata({"has_persona_voice": has_voice})
+            # 프로필 없이 도는가"를 셀 수 있다. 나침반을 따로 세는 이유: 그것이
+            # 응답을 실제로 바꾸는지가 이번 단위에서 답해야 할 질문이라, 붙은
+            # 방송과 안 붙은 방송을 트레이스에서 갈라 볼 수 있어야 한다.
+            trace.set_metadata(
+                {
+                    "has_persona_voice": has_voice,
+                    "has_compass": profile is not None and profile.has_compass(),
+                }
+            )
             if not has_voice:
                 logger.info(
                     "페르소나 프로필 없음 — 공통 프롬프트로 답한다 persona_id=%s",

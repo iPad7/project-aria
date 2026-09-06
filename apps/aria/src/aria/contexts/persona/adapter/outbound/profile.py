@@ -37,6 +37,7 @@ class PersonaProfileProvider:
             return None
 
         style = self._profiles.get_style(persona_id)
+        compass = self._profiles.get_compass(persona_id)
         return PersonaProfile(
             persona_id=persona.id,
             name=persona.name,
@@ -48,4 +49,8 @@ class PersonaProfileProvider:
             directness=style.directness if style else None,
             empathy_expression=style.empathy_expression if style else None,
             core_values=tuple(self._profiles.list_core_values(persona_id)),
+            # 나침반도 없는 것이 정상이다 — 말투와 독립이라 한쪽만 설정할 수 있다.
+            moral_standard=compass.standard if compass else None,
+            rule_adherence=compass.rule_adherence if compass else None,
+            fairness=compass.fairness if compass else None,
         )

@@ -65,13 +65,15 @@
 
 ### communication_style / moral_compass / personality_trait  *(각 1:1 persona)*
 
-> **`communication_style`만 구현됐다**(테이블 `persona_communication_style`). `moral_compass`·`personality_trait`는 아직 설계다.
+> **`communication_style`·`moral_compass`가 구현됐다**(테이블 `persona_communication_style`·`persona_moral_compass`). `personality_trait`는 아직 설계다.
 >
-> 이유: `personality_trait`는 축이 10개인데(개방성·성실성·정서안정성…) 프롬프트로 바꿨을 때 응답 차이가 잘 드러나지 않고, **지금은 그걸 검증할 방법이 없다** — 관측성(Langfuse)이 아직 없다. 반면 말투와 가치관 우선순위는 즉시 눈에 보인다. 나머지 둘은 관측성이 붙은 뒤 효과를 측정하며 넣는다.
+> `moral_compass`는 관측성(Langfuse)이 붙은 뒤 들어왔다 — 효과를 측정하며 넣는다는 조건이 채워졌다. 상담 도메인에서 답이 갈리는 지점이 "누가 잘못했나"라, 세 축은 같은 사연에 대한 응답을 실제로 다르게 만든다. 프롬프트에서는 **가치관과 별도 문단**이다(`docs/architecture.md`).
+>
+> `personality_trait`는 아직 보류다: 축이 10개인데(개방성·성실성·정서안정성…) 프롬프트로 바꿨을 때 응답 차이가 잘 드러나지 않는다. `moral_compass`의 효과를 `has_compass` 트레이스 속성으로 확인한 뒤에 판단한다.
 | 테이블 | PK | 주요 컬럼 |
 |---|---|---|
 | communication_style | persona_id (FK) | tone, sentence_length, question_style, directness(int 1~5), empathy_expression |
-| moral_compass | persona_id (FK) | standard, rule_adherence, fairness |
+| moral_compass | persona_id (FK) | standard(필수 — 나침반의 앵커), rule_adherence, fairness |
 | personality_trait | persona_id (FK) | energy_direction, emotional_processing, judgment_decision, interpersonal_attitude, openness, conscientiousness, emotional_stability, social_sensitivity, risk_preference, time_orientation |
 
 ### tts_settings  *(1:1 persona, ElevenLabs)* — **범위 밖**

@@ -9,6 +9,7 @@ from uuid import UUID
 from aria.contexts.persona.domain.model import (
     CommunicationStyle,
     CoreValue,
+    MoralCompass,
     Persona,
 )
 
@@ -26,7 +27,7 @@ class PersonaRepository(Protocol):
 
 
 class ProfileRepository(Protocol):
-    """말투·가치관. `PersonaRepository`와 나눈 이유는 수명이 다르기 때문이다 —
+    """말투·나침반·가치관. `PersonaRepository`와 나눈 이유는 수명이 다르기 때문이다 —
     페르소나는 CRUD로 자주 오가지만 프로필은 거의 안 바뀌고 읽기가 압도적이다.
     """
 
@@ -34,6 +35,12 @@ class ProfileRepository(Protocol):
 
     def set_style(self, style: CommunicationStyle) -> None:
         """말투를 저장한다(있으면 덮어쓴다). 1:1이라 upsert가 자연스럽다."""
+        ...
+
+    def get_compass(self, persona_id: UUID) -> MoralCompass | None: ...
+
+    def set_compass(self, compass: MoralCompass) -> None:
+        """나침반을 저장한다(있으면 덮어쓴다). 말투와 같은 1:1 upsert다."""
         ...
 
     def ensure_value(self, value_name: str) -> CoreValue:

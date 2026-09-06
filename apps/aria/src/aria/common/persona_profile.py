@@ -40,14 +40,26 @@ class PersonaProfile:
     empathy_expression: str | None = None
     # 우선순위 순. 첫 번째가 1순위다.
     core_values: tuple[str, ...] = field(default_factory=tuple)
+    # 도덕 나침반 — 가치가 부딪혔을 때 무엇을 근거로 판단하는가. 앞의 필드들이
+    # 어떻게 말하는가라면 이쪽은 무엇을 말하는가에 가깝다.
+    moral_standard: str | None = None
+    rule_adherence: str | None = None
+    fairness: str | None = None
 
     def has_voice(self) -> bool:
-        """인격을 말투로 표현할 재료가 있는가.
+        """이 페르소나답게 말할 재료가 있는가.
 
         False면 이 페르소나는 아직 이름과 설명뿐이다 — 소비자는 공통 프롬프트로
         폴백한다. 프로필이 없다고 생성을 거부하면 기존 페르소나가 전부 죽는다.
+
+        나침반만 설정한 페르소나도 True다. 말투가 없어도 "무엇을 근거로 판단하는가"는
+        응답을 그 페르소나답게 만든다 — 가치관만 있는 경우와 같은 이유다.
         """
-        return bool(self.tone or self.core_values)
+        return bool(self.tone or self.core_values or self.moral_standard)
+
+    def has_compass(self) -> bool:
+        """나침반이 설정돼 있는가. 트레이스가 효과를 갈라 보는 근거다."""
+        return bool(self.moral_standard)
 
 
 class PersonaProfilePort(Protocol):

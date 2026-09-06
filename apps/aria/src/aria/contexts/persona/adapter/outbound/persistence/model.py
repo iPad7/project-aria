@@ -43,6 +43,17 @@ class CommunicationStyleTable(TimestampMixin, SQLModel, table=True):
     )
 
 
+class MoralCompassTable(TimestampMixin, SQLModel, table=True):
+    """도덕 나침반 — 말투와 같은 1:1 형태다. 세 축 모두 자유 문자열이라 제약이 없다."""
+
+    __tablename__ = "persona_moral_compass"
+
+    persona_id: UUID = Field(primary_key=True)
+    standard: str = Field(max_length=200)
+    rule_adherence: str = Field(default="", max_length=200)
+    fairness: str = Field(default="", max_length=200)
+
+
 class CoreValueTable(UUIDMixin, TimestampMixin, table=True):
     """가치관 어휘. 페르소나들이 공유하므로 이름이 유일하다."""
 

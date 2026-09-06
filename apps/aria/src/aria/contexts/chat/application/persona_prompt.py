@@ -59,7 +59,30 @@ def _lines(profile: PersonaProfile) -> list[str]:
         out.append(f"중시하는 가치(앞설수록 우선): {ranked}")
         out.append("가치가 서로 부딪히면 앞선 가치를 따른다.")
 
+    out.extend(_compass_lines(profile))
+
     out.append("한국어로 답한다.")
+    return out
+
+
+def _compass_lines(profile: PersonaProfile) -> list[str]:
+    """도덕 나침반 — **가치관과 한 문단에 섞지 않는다.**
+
+    가치관은 "무엇을 중시하는가"이고 나침반은 "그것들이 부딪혔을 때 어느 쪽"이다.
+    한 덩어리로 주면 모델이 나침반을 가치 목록의 연장으로 읽어 둘 다 흐려진다.
+    별도 문단의 머리말이 그 차이를 명시한다.
+    """
+    if not profile.moral_standard:
+        # 나침반의 앵커는 판단 기준이다. 그것 없이 나머지만 있으면 문단의 머리말이
+        # 가리킬 것이 없어, 없는 것으로 본다(`has_compass`도 같은 기준).
+        return []
+
+    out = ["판단이 필요할 때 따르는 기준:"]
+    out.append(f"- 옳고 그름은 이렇게 가른다: {profile.moral_standard}")
+    if profile.rule_adherence:
+        out.append(f"- 원칙과 사정이 부딪히면: {profile.rule_adherence}")
+    if profile.fairness:
+        out.append(f"- 공정하다는 것은: {profile.fairness}")
     return out
 
 

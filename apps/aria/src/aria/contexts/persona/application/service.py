@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from uuid import UUID
 
 from aria.common.errors import NotFoundError, PermissionDeniedError, ValidationError
@@ -10,7 +11,11 @@ from aria.contexts.persona.application.port.out.repository import (
     PersonaRepository,
     ProfileRepository,
 )
-from aria.contexts.persona.domain.model import CommunicationStyle, Persona
+from aria.contexts.persona.domain.model import (
+    CommunicationStyle,
+    MoralCompass,
+    Persona,
+)
 
 
 class PersonaService:
@@ -70,8 +75,21 @@ class PersonaService:
         self._personas.delete(persona)
 
 
+@dataclass(frozen=True)
+class Voice:
+    """한 페르소나의 인격 전체를 한 번에 읽은 것.
+
+    튜플로 돌려주던 것을 이름 붙인 것이다 — 축이 하나 늘 때마다 호출하는 쪽의
+    언패킹이 전부 깨지고, 세 개를 넘어가면 순서를 외워야 한다.
+    """
+
+    style: CommunicationStyle | None
+    compass: MoralCompass | None
+    core_values: list[str]
+
+
 class PersonaProfileService:
-    """말투·가치관 관리.
+    """말투·나침반·가치관 관리.
 
     `PersonaService`와 나눈 이유: 프로필 설정은 페르소나 CRUD와 쓰임새가 다르고,
     무엇보다 **캐시 무효화라는 부수효과**를 갖는다. 그걸 CRUD 서비스에 섞으면
@@ -92,11 +110,12 @@ class PersonaProfileService:
         # 캐시 무효화 훅. 열혈순위와 달리 **쓰기도 이 컨텍스트의 것**이라 걸 수 있다.
         self._on_change = on_change
 
-    def get(self, persona_id: UUID) -> tuple[CommunicationStyle | None, list[str]]:
+    def get(self, persona_id: UUID) -> Voice:
         self._personas.get_public(persona_id)  # 없는 페르소나면 여기서 404
-        return (
-            self._profiles.get_style(persona_id),
-            self._profiles.list_core_values(persona_id),
+        return Voice(
+            style=self._profiles.get_style(persona_id),
+            compass=self._profiles.get_compass(persona_id),
+            core_values=self._profiles.list_core_values(persona_id),
         )
 
     def set_style(
@@ -122,6 +141,26 @@ class PersonaProfileService:
         self._profiles.set_style(style)
         self._invalidate(persona_id)
         return style
+
+    def set_compass(
+        self,
+        owner_id: UUID,
+        persona_id: UUID,
+        *,
+        standard: str,
+        rule_adherence: str = "",
+        fairness: str = "",
+    ) -> MoralCompass:
+        self._personas.get_owned(owner_id, persona_id)
+        compass = MoralCompass(
+            persona_id=persona_id,
+            standard=standard,
+            rule_adherence=rule_adherence,
+            fairness=fairness,
+        )
+        self._profiles.set_compass(compass)
+        self._invalidate(persona_id)
+        return compass
 
     def set_core_values(
         self, owner_id: UUID, persona_id: UUID, value_names: Sequence[str]
