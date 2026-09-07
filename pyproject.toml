@@ -25,12 +25,18 @@ select = ["E4", "E7", "E9", "F", "I", "UP"]
 known-first-party = ["aria", "payments"]
 
 [tool.pytest.ini_options]
-addopts = "--import-mode=importlib"
+# 통합 테스트는 **기본 실행에서 뺀다.** `uv run pytest`는 인메모리 SQLite·fakeredis만
+# 쓰므로 인프라 없이 돌아야 하고, 그 약속이 깨지면 아무것도 못 돌리는 체크아웃이 된다.
+# 뒤에 오는 `-m`이 이기므로 `pytest -m integration`으로 반대편만 고를 수 있다.
+addopts = "--import-mode=importlib -m 'not integration'"
 testpaths = ["apps/aria/tests", "apps/payments/tests"]
 # importlib 모드는 sys.path를 건드리지 않으므로, 테스트끼리 공유하는 하네스를
 # 이름으로 import하려면 경로를 명시해야 한다(예: tests/generation_harness.py).
 pythonpath = ["apps/aria/tests"]
 asyncio_mode = "auto"
+markers = [
+    "integration: 실제 Postgres·Redis·Kafka가 떠 있어야 한다. 기본 실행에서 제외되고 CI의 별도 스텝에서 돈다",
+]
 
 [dependency-groups]
 dev = [
