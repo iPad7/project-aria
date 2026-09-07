@@ -47,8 +47,11 @@ feature ──(squash & merge)──▶ develop ──(merge commit + tag)──
 
 1. `ruff check` · `ruff format --check`
 2. `lint-imports` — aria·payments 경계
-3. `pytest`
-4. `uv build --all-packages`
+3. `pytest` — 유닛 (인메모리 SQLite·fakeredis, 인프라 불필요)
+4. `alembic upgrade head` → `pytest -m integration` — 서비스 컨테이너(Postgres·Redis·Kafka)를 실제로 태운다
+5. `uv build --all-packages`
+
+3과 4를 나눈 이유: 유닛은 체크아웃만으로 돌아야 하고(그 약속이 깨지면 아무것도 못 돌린다), 실제 인프라를 타야만 보이는 것(pub/sub 구독 수·tz-aware 시각·브로커 발행)은 유닛이 구조적으로 못 본다. 마커로 갈라 두 스텝 모두 PR마다 돌린다 — 인프라 쪽만 `develop` push로 미루면 깨진 채 머지된다.
 
 ## 릴리스 — main 기준, SemVer
 

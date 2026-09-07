@@ -30,6 +30,7 @@
 
 - 추론: 로컬은 GPU 없이 **OpenAI fallback**(`PersonaLLMPort`) 사용 → inference 컨테이너 불필요.
 - 미디어: 로컬은 nginx로 HLS 서빙(운영 CDN 대체).
+- **CI도 같은 셋을 쓴다** — GitHub Actions 서비스 컨테이너로 같은 이미지·같은 포트를 띄워 `pytest -m integration`을 돌린다(`docs/github-workflow.md`). 로컬에서 본 것과 CI가 보는 것을 어긋나지 않게 두기 위해서다.
 
 ## 운영 예상 (AWS 기준, 미확정)
 
