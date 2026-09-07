@@ -130,7 +130,9 @@ flowchart LR
 
 ## 앱 ↔ 추론 경계
 
-> **인격은 프롬프트로, 모델 선택은 포트 뒤로.** 페르소나의 말투·가치관은 `PersonaProfilePort`로 chat에 건너와 **application이** `Message(role="system")` 하나로 합성한다(`chat/application/persona_prompt.py`). 어댑터에서 만들면 어댑터가 페르소나를 조회하게 되어 아래 경계가 한쪽에서 무너진다. LoRA가 붙어도 이 경로는 남는다 — LoRA가 말투를 잡고 시스템 프롬프트가 맥락·가치관을 준다. 그리고 이 경로로 나온 응답이 그 LoRA를 학습시킬 데이터가 된다.
+> **인격은 프롬프트로, 모델 선택은 포트 뒤로.** 페르소나의 말투·가치관·도덕 나침반은 `PersonaProfilePort`로 chat에 건너와 **application이** `Message(role="system")` 하나로 합성한다(`chat/application/persona_prompt.py`). 어댑터에서 만들면 어댑터가 페르소나를 조회하게 되어 아래 경계가 한쪽에서 무너진다. LoRA가 붙어도 이 경로는 남는다 — LoRA가 말투를 잡고 시스템 프롬프트가 맥락·가치관을 준다. 그리고 이 경로로 나온 응답이 그 LoRA를 학습시킬 데이터가 된다.
+
+> **나침반은 가치관과 별도 문단이다.** 가치관이 "무엇을 중시하는가"라면 도덕 나침반(`moral_compass`)은 "그것들이 부딪혔을 때 무엇을 근거로 판단하는가"다. 한 덩어리로 주면 모델이 나침반을 가치 목록의 연장으로 읽어 둘 다 흐려진다. 효과는 Langfuse의 `has_compass` 속성으로 붙은 방송과 안 붙은 방송을 갈라 본다 — `personality_trait`를 넣을지는 그 관측 결과로 정한다.
 
 `PersonaLLMPort`(`contexts/chat/application/port/out/llm.py`)가 유일한 접점. 앱은 `persona_id`만 넘기고 모델 버전을 모른다 — 버전 해석은 경계 너머 레지스트리 alias. 어댑터는 `contexts/chat/adapter/outbound/inference`. OpenAI fallback도 같은 포트 뒤.
 

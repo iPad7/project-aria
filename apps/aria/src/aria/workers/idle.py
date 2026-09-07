@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from sqlmodel import Session
 
@@ -93,34 +95,52 @@ async def tick(
     return advanced
 
 
-async def run() -> None:
+@asynccontextmanager
+async def composed() -> AsyncIterator[
+    tuple[RoomService, ProgressService, AbandonedRoomCloser]
+]:
+    """진행 루프의 배선. `run()`과 `scripts/smoke_lifecycle.py`가 함께 쓴다.
+
+    스모크 스크립트가 자기 배선을 따로 갖게 두면, 실제 워커는 안 도는데 스크립트만
+    통과하는 상태가 생긴다 — 배선이 바로 그 스크립트가 검증하려는 것이다.
+    """
     redis = get_redis()
     broker = get_broker()
     await broker.connect()
 
     # 세션 하나를 워커 수명 동안 쓴다. 요청-응답이 아니라 긴 루프라 요청마다
     # 세션을 여는 FastAPI의 방식이 맞지 않는다.
-    with Session(engine) as session:
-        activity = RedisActivityTracker(redis)
-        audience = RedisRoomAudience(redis)
-        rooms = RoomService(SqlModelRoomRepository(session))
-        progress = ProgressService(
-            activity=activity,
-            lock=RedisIdleLock(redis),
-            stories=CommunityStoryFeed(SqlModelStoryRepository(session)),
-            generation=GenerationRequestPublisher(KafkaEventBus(broker)),
-            candidates=RedisCandidateBuffer(redis),
-            clusterer=LexicalTopicClusterer(),
-            coordinator=RedisResponseCoordinator(redis),
-            audience=audience,
-            threshold_seconds=settings.idle_threshold_seconds,
-        )
-        closer = AbandonedRoomCloser(
-            rooms,
-            activity,
-            audience,
-            abandon_seconds=settings.room_abandon_seconds,
-        )
+    try:
+        with Session(engine) as session:
+            activity = RedisActivityTracker(redis)
+            audience = RedisRoomAudience(redis)
+            rooms = RoomService(SqlModelRoomRepository(session))
+            progress = ProgressService(
+                activity=activity,
+                lock=RedisIdleLock(redis),
+                stories=CommunityStoryFeed(SqlModelStoryRepository(session)),
+                generation=GenerationRequestPublisher(KafkaEventBus(broker)),
+                candidates=RedisCandidateBuffer(redis),
+                clusterer=LexicalTopicClusterer(),
+                coordinator=RedisResponseCoordinator(redis),
+                audience=audience,
+                threshold_seconds=settings.idle_threshold_seconds,
+            )
+            closer = AbandonedRoomCloser(
+                rooms,
+                activity,
+                audience,
+                abandon_seconds=settings.room_abandon_seconds,
+            )
+            yield rooms, progress, closer
+    finally:
+        # 워커는 이 블록을 빠져나오지 않지만 스모크 스크립트는 빠져나온다 — 닫지
+        # 않으면 프로듀서가 버퍼를 안은 채 남는다.
+        await broker.stop()
+
+
+async def run() -> None:
+    async with composed() as (rooms, progress, closer):
         logger.info(
             "진행 루프 시작 — %.1fs마다 최대 %d개 방, 방치 %.0f분이면 종료",
             settings.idle_tick_seconds,

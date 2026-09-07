@@ -15,9 +15,9 @@
   - **기준선은 A-1의 OpenAI로 유지합니다.** 8GB VRAM 때문에 택한 4비트 양자화가 나중에 SFT 모델을 평가하는 잣대가 되어선 안 되기 때문입니다. A-2는 "자체 GPU에서 자체 모델이 돈다"는 실증입니다.
 
 - [ ] **다음 — LLM 코어** (순서 확정). 근거: *"쓸 수 있는 걸 먼저 만들어 데이터·기준선을 확보한 뒤 자체 모델로 전환"* 이라는 이 문서의 원칙에서 **이제 앞의 절반이 끝났습니다.** 배관은 깔렸는데 정작 흐르는 것이 페르소나답지 않은 상태라, 다음은 그 안쪽입니다.
-  1. ~~**페르소나 해석**~~ — **완료**(#59). `communication_style` + `core_value`(우선순위 M:N)를 만들고, `PersonaProfilePort`로 chat에 건너가 시스템 프롬프트가 됩니다. `moral_compass`·`personality_trait`는 3번(관측성)이 붙어 효과를 측정할 수 있을 때 넣습니다
+  1. ~~**페르소나 해석**~~ — **완료**(#59·#67). `communication_style` + `core_value`(우선순위 M:N)를 만들고, `PersonaProfilePort`로 chat에 건너가 시스템 프롬프트가 됩니다. 관측성이 붙은 뒤 `moral_compass`(판단 기준·원칙 준수·공정)를 별도 문단으로 얹었습니다(#67). `personality_trait`는 나침반의 효과를 `has_compass` 트레이스로 확인한 뒤에 판단합니다
   2. ~~**댓글 선별**~~ — **완료**(#63). 토픽 군집화(문자 n-gram, 포트 뒤) + 점수 기반 선별(질문·길이·활성 토픽). 임베딩은 같은 포트 뒤에 나중에 꽂습니다
-  3. **관측성/평가** — LLM 레이어(Langfuse) **완료**(#61). 프롬프트·응답·`model_version`·지연에 더해 맥락(어느 방·무엇이 촉발·프로필 유무·**버려진 생성**)까지 남습니다. 시스템 레이어(OTel→SigNoz)는 아직 부하가 없어 미룹니다. 이제 `moral_compass`·`personality_trait`의 효과를 측정하며 넣을 수 있습니다
+  3. **관측성/평가** — LLM 레이어(Langfuse) **완료**(#61). 프롬프트·응답·`model_version`·지연에 더해 맥락(어느 방·무엇이 촉발·프로필 유무·**버려진 생성**)까지 남습니다. 시스템 레이어(OTel→SigNoz)는 아직 부하가 없어 미룹니다. 이 관측성이 열어 준 것이 1번의 나머지 절반입니다 — `moral_compass`가 #67에서 `has_compass` 속성과 함께 들어갔고, `personality_trait`는 그 관측 결과로 판단합니다
   4. **ML 플랫폼** — SFT · DPO · 평가 · 레지스트리
   5. **미디어 송출** — 데모가 필요해질 때. **브로드캐스터를 분리했으므로 그때 aria는 바뀌지 않습니다**(`docs/architecture.md`), 그래서 미룰 수 있는 결정이 됐습니다
 
@@ -32,7 +32,7 @@
 ### Phase 1 — 도메인 + 채팅 골조
 
 - [x] persona 도메인(CRUD·소유권) — `name`/`tagline`/`description` 수준
-- [ ] persona 레거시 스키마 계승 — `core_value`(M:N)·`communication_style` **완료**(#59, 프롬프트 해석까지). `moral_compass`·`personality_trait`는 관측성이 붙은 뒤(효과를 측정하며), `tts_settings`는 브로드캐스터 쪽
+- [ ] persona 레거시 스키마 계승 — `core_value`(M:N)·`communication_style` **완료**(#59, 프롬프트 해석까지) · `moral_compass` **완료**(#67). `personality_trait`는 나침반의 효과를 본 뒤, `tts_settings`는 브로드캐스터 쪽
 - [x] 방(Room) — 개설·상태(pending/live/finished)·라이브 유일성. 채팅·후원·WS가 라이브 방에서만 된다. idle 루프와 미디어 송출(`hls_url`)의 전제
 - [ ] 토픽스레드 · MediaPacket/seq · 응답선별
 - [x] WebSocket 채팅 수신·브로드캐스트 (Redis pub/sub 백플레인)

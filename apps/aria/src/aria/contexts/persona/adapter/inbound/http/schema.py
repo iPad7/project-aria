@@ -50,6 +50,14 @@ class CommunicationStyleRequest(SchemaBase):
     empathy_expression: str = Field(default="", max_length=200)
 
 
+class MoralCompassRequest(SchemaBase):
+    """도덕 나침반. 셋 다 자유 문장이다 — 그대로 프롬프트가 된다."""
+
+    standard: str = Field(min_length=1, max_length=200)
+    rule_adherence: str = Field(default="", max_length=200)
+    fairness: str = Field(default="", max_length=200)
+
+
 class CoreValuesRequest(SchemaBase):
     """가치관 목록. **순서가 곧 우선순위**라 집합이 아니라 배열이다."""
 
@@ -57,8 +65,10 @@ class CoreValuesRequest(SchemaBase):
 
 
 class PersonaProfileResponse(SchemaBase):
-    """말투·가치관. 말투를 아직 설정하지 않은 페르소나는 `style`이 null이다."""
+    """말투·나침반·가치관. 아직 설정하지 않은 축은 null이다 — 셋은 서로 독립이라
+    말투만 정하고 나침반은 비워 둘 수 있다."""
 
     persona_id: UUID
     style: CommunicationStyleRequest | None
+    compass: MoralCompassRequest | None
     core_values: list[str]

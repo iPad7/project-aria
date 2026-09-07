@@ -1,13 +1,15 @@
-"""페르소나 해석 — 말투·가치관이 응답에 반영되는가.
+"""페르소나 해석 — 말투·나침반·가치관이 응답에 반영되는가.
 
 이 단위의 위험은 넷이다:
 
-1. **프롬프트 합성** — 우선순위가 사라지거나, 숫자 척도가 뜻 없이 들어가거나.
+1. **프롬프트 합성** — 우선순위가 사라지거나, 숫자 척도가 뜻 없이 들어가거나,
+   나침반이 가치 목록에 섞여 둘 다 흐려지는 것.
 2. **폴백** — 프로필 없는 기존 페르소나가 생성에서 죽는 것.
 3. **경계** — 어댑터가 페르소나를 조회하게 되어 앱/추론 경계가 무너지는 것.
 4. **교체 의미론** — 가치관 목록이 부분 수정처럼 동작해 우선순위가 밀리는 것.
 """
 
+import json
 from collections.abc import Iterator
 from uuid import UUID, uuid4
 
@@ -39,7 +41,11 @@ from aria.contexts.persona.adapter.outbound.persistence.repository import (
     SqlModelProfileRepository,
 )
 from aria.contexts.persona.adapter.outbound.profile import PersonaProfileProvider
-from aria.contexts.persona.domain.model import CommunicationStyle, Persona
+from aria.contexts.persona.domain.model import (
+    CommunicationStyle,
+    MoralCompass,
+    Persona,
+)
 
 # --- 프롬프트 합성 (이 단위의 핵심) -----------------------------------------
 
@@ -105,6 +111,64 @@ def test_empty_optional_fields_do_not_leave_dangling_labels() -> None:
         assert label not in content
 
 
+# --- 도덕 나침반 -------------------------------------------------------------
+
+
+def test_the_compass_is_its_own_paragraph_not_another_value() -> None:
+    """가치관은 "무엇을 중시하는가", 나침반은 "부딪혔을 때 어느 쪽"이다.
+
+    한 덩어리로 주면 모델이 나침반을 가치 목록의 연장으로 읽어 둘 다 흐려진다.
+    """
+    content = system_message(
+        _profile(
+            tone="따뜻한",
+            core_values=("정직", "성장"),
+            moral_standard="관계가 회복될 수 있는지를 먼저 본다",
+        )
+    ).content
+
+    # 나침반 문단이 가치 목록 **뒤에** 오고, 자기 머리말을 갖는다.
+    assert content.index("중시하는 가치") < content.index(
+        "판단이 필요할 때 따르는 기준"
+    )
+    assert "관계가 회복될 수 있는지를 먼저 본다" in content
+
+
+def test_a_compass_alone_is_enough_to_have_a_voice() -> None:
+    # 말투가 없어도 "무엇을 근거로 판단하는가"는 응답을 그 페르소나답게 만든다.
+    profile = _profile(moral_standard="약속을 지켰는지부터 본다")
+
+    assert profile.has_voice() is True
+    assert system_message(profile).content != DEFAULT_SYSTEM
+
+
+def test_the_standard_anchors_the_compass() -> None:
+    """판단 기준 없이 나머지 축만 있으면 문단의 머리말이 가리킬 것이 없다."""
+    profile = _profile(tone="따뜻한", rule_adherence="사정을 먼저 듣는다")
+
+    assert profile.has_compass() is False
+    assert "판단이 필요할 때" not in system_message(profile).content
+
+
+def test_optional_compass_axes_do_not_leave_dangling_labels() -> None:
+    content = system_message(_profile(moral_standard="사실관계부터 본다")).content
+
+    assert "원칙과 사정이 부딪히면" not in content
+    assert "공정하다는 것은" not in content
+
+
+def test_two_compasses_produce_different_prompts() -> None:
+    # 같은 말투라도 나침반이 다르면 같은 사연에 다르게 답해야 한다.
+    strict = system_message(
+        _profile(tone="차분한", moral_standard="약속을 지켰는지부터 본다")
+    ).content
+    lenient = system_message(
+        _profile(tone="차분한", moral_standard="어떤 사정이 있었는지부터 본다")
+    ).content
+
+    assert strict != lenient
+
+
 # --- 영속성 -----------------------------------------------------------------
 
 
@@ -133,6 +197,24 @@ def test_style_is_upserted_not_duplicated(session: Session, persona: Persona) ->
 
     style = repo.get_style(persona.id)
     assert style is not None and style.tone == "차가운"
+
+
+def test_compass_is_upserted_not_duplicated(session: Session, persona: Persona) -> None:
+    repo = SqlModelProfileRepository(session)
+    repo.set_compass(MoralCompass(persona_id=persona.id, standard="사실관계부터 본다"))
+    repo.set_compass(MoralCompass(persona_id=persona.id, standard="사정부터 듣는다"))
+
+    compass = repo.get_compass(persona.id)
+    assert compass is not None and compass.standard == "사정부터 듣는다"
+
+
+def test_style_and_compass_are_independent(session: Session, persona: Persona) -> None:
+    # 나침반만 정한 페르소나가 정상이다 — 한쪽 설정이 다른 쪽을 만들지 않는다.
+    repo = SqlModelProfileRepository(session)
+    repo.set_compass(MoralCompass(persona_id=persona.id, standard="사실관계부터 본다"))
+
+    assert repo.get_style(persona.id) is None
+    assert repo.get_compass(persona.id) is not None
 
 
 def test_core_values_are_replaced_wholesale(session: Session, persona: Persona) -> None:
@@ -211,6 +293,26 @@ async def test_provider_carries_style_and_values(
     assert profile.has_voice() is True
 
 
+async def test_provider_carries_the_compass(session: Session, persona: Persona) -> None:
+    profiles = SqlModelProfileRepository(session)
+    profiles.set_compass(
+        MoralCompass(
+            persona_id=persona.id,
+            standard="관계가 회복될 수 있는지를 먼저 본다",
+            fairness="잘잘못을 가리기보다 각자의 몫을 나눈다",
+        )
+    )
+
+    profile = await PersonaProfileProvider(
+        SqlModelPersonaRepository(session), profiles
+    ).profile_of(persona.id)
+
+    assert profile is not None
+    assert profile.moral_standard == "관계가 회복될 수 있는지를 먼저 본다"
+    assert profile.fairness == "잘잘못을 가리기보다 각자의 몫을 나눈다"
+    assert profile.has_compass() is True
+
+
 # --- 캐시 --------------------------------------------------------------------
 
 
@@ -251,6 +353,39 @@ async def test_invalidation_makes_the_next_read_go_to_the_source() -> None:
     await cached.profile_of(profile.persona_id)
 
     assert inner.hits == 2
+
+
+async def test_cache_round_trip_keeps_the_compass() -> None:
+    # 직렬화가 필드를 빠뜨리면 캐시 히트에서만 나침반이 사라진다 — 재현이 어려운
+    # 종류의 버그라 왕복을 못 박는다.
+    redis = FakeAsyncRedis(server=FakeServer(), decode_responses=True)
+    profile = _profile(
+        tone="따뜻한",
+        moral_standard="관계가 회복될 수 있는지를 먼저 본다",
+        rule_adherence="약속은 지켜야 하지만 사정을 먼저 듣는다",
+        fairness="각자의 몫을 나눈다",
+    )
+    cached = CachedPersonaProfiles(_CountingProvider(profile), redis)
+
+    await cached.profile_of(profile.persona_id)
+    second = await cached.profile_of(profile.persona_id)
+
+    assert second == profile
+
+
+async def test_a_cache_entry_from_before_the_compass_is_refetched() -> None:
+    """필드가 늘어난 배포 직후 옛 캐시가 남아 있다 — 손상된 값으로 보고 스스로 낫는다."""
+    redis = FakeAsyncRedis(server=FakeServer(), decode_responses=True)
+    profile = _profile(tone="따뜻한", moral_standard="사실관계부터 본다")
+    inner = _CountingProvider(profile)
+    cached = CachedPersonaProfiles(inner, redis)
+    await redis.set(
+        f"persona:profile:{profile.persona_id}",
+        json.dumps({"persona_id": str(profile.persona_id), "name": "아리아"}),
+    )
+
+    assert await cached.profile_of(profile.persona_id) == profile
+    assert inner.hits == 1
 
 
 async def test_unknown_persona_is_not_cached() -> None:
@@ -333,7 +468,73 @@ def test_bare_persona_has_no_style_yet(client: TestClient) -> None:
     voice = client.get(f"/personas/{persona_id}/voice").json()
 
     assert voice["style"] is None
+    assert voice["compass"] is None
     assert voice["core_values"] == []
+
+
+def test_setting_the_compass_requires_ownership(client: TestClient) -> None:
+    persona_id = _own_persona(client, uuid4())
+
+    res = client.put(
+        f"/personas/{persona_id}/moral-compass",
+        headers=_headers(uuid4()),  # 남의 페르소나
+        json={"standard": "내 맘대로"},
+    )
+
+    assert res.status_code == 403
+
+
+def test_owner_sets_the_compass(client: TestClient) -> None:
+    owner = uuid4()
+    persona_id = _own_persona(client, owner)
+
+    res = client.put(
+        f"/personas/{persona_id}/moral-compass",
+        headers=_headers(owner),
+        json={
+            "standard": "관계가 회복될 수 있는지를 먼저 본다",
+            "rule_adherence": "약속은 지켜야 하지만 사정을 먼저 듣는다",
+        },
+    )
+
+    assert res.status_code == 200, res.text
+    voice = client.get(f"/personas/{persona_id}/voice").json()  # 공개 조회
+    assert voice["compass"]["standard"] == "관계가 회복될 수 있는지를 먼저 본다"
+    assert voice["compass"]["fairness"] == ""
+
+
+def test_setting_the_compass_leaves_the_style_alone(client: TestClient) -> None:
+    """축마다 PUT이 따로인 이유 — 하나를 손볼 때 다른 하나가 지워지면 안 된다."""
+    owner = uuid4()
+    persona_id = _own_persona(client, owner)
+    client.put(
+        f"/personas/{persona_id}/style",
+        headers=_headers(owner),
+        json={"tone": "따뜻하고 나긋한"},
+    )
+
+    voice = client.put(
+        f"/personas/{persona_id}/moral-compass",
+        headers=_headers(owner),
+        json={"standard": "사실관계부터 본다"},
+    ).json()
+
+    assert voice["style"]["tone"] == "따뜻하고 나긋한"
+    assert voice["compass"]["standard"] == "사실관계부터 본다"
+
+
+def test_a_compass_without_a_standard_is_rejected(client: TestClient) -> None:
+    # 판단 기준이 나침반의 앵커다 — 나머지 축만으로는 문단이 성립하지 않는다.
+    owner = uuid4()
+    persona_id = _own_persona(client, owner)
+
+    res = client.put(
+        f"/personas/{persona_id}/moral-compass",
+        headers=_headers(owner),
+        json={"rule_adherence": "사정을 먼저 듣는다"},
+    )
+
+    assert res.status_code == 422
 
 
 def test_duplicate_core_values_are_rejected(client: TestClient) -> None:

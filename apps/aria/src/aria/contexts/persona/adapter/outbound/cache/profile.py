@@ -48,6 +48,9 @@ def _to_json(profile: PersonaProfile) -> str:
             "directness": profile.directness,
             "empathy_expression": profile.empathy_expression,
             "core_values": list(profile.core_values),
+            "moral_standard": profile.moral_standard,
+            "rule_adherence": profile.rule_adherence,
+            "fairness": profile.fairness,
         }
     )
 
@@ -64,6 +67,11 @@ def _from_json(raw: str) -> PersonaProfile:
         directness=data["directness"],
         empathy_expression=data["empathy_expression"],
         core_values=tuple(data["core_values"]),
+        # 키가 없으면 KeyError → 아래에서 손상된 값으로 보고 지운 뒤 DB에서 다시
+        # 읽는다. 필드가 늘어난 배포 직후의 옛 캐시가 그 경로로 스스로 낫는다.
+        moral_standard=data["moral_standard"],
+        rule_adherence=data["rule_adherence"],
+        fairness=data["fairness"],
     )
 
 
