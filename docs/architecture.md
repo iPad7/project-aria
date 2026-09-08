@@ -87,6 +87,8 @@ flowchart LR
 | **inference 서빙** | vLLM 멀티-LoRA | 별도 repo(GPU) | GPU 하드 경계 |
 | **llmops** | 데이터셋→SFT→DPO→평가→레지스트리 | 별도 repo(GPU) | 배치·GPU |
 
+> **llmops가 무엇을 학습시킬 것인지는 `docs/persona-modeling.md`.** 요약하면 *연애상담을 잘하는 모델*이 아니라 **시스템 프롬프트에 적힌 인격대로 답하는 모델**이다 — 좁은 도메인 SFT는 도메인을 가중치에 박아 프롬프트로 빼낼 수 없게 만든다. 그 방침이 `persona_prompt.py`의 버티컬 문자열을 페르소나 속성으로 올릴 것을 요구한다.
+
 **추출 브라이트라인**: 다른 런타임(GPU) 또는 자연 async + 강한 격리 — 이 둘만 서비스. 나머지는 프로세스 타입 스케일.
 
 ## 레이어 (Hexagonal-Lite, 컨텍스트별 수직 슬라이스)
