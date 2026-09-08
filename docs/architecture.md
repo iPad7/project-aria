@@ -147,6 +147,10 @@ flowchart LR
 
 payments→wallet은 **outbox 패턴**(결제확정 + outbox 로우 로컬 트랜잭션 → relay가 Kafka 발행 → wallet 멱등 소비). 상세: `docs/events.md`.
 
+> **구현됨**(#71). relay는 payments 안의 **별도 진입점**(`payments.workers.outbox`)이다 — outbox 테이블이 payments DB 소유라 밖에서 읽으면 두 서비스가 한 스키마를 공유하게 되고, api의 백그라운드 태스크로 두면 api를 재배포할 때마다 relay가 끊긴다. 소비는 aria의 넷째 진입점 `aria/workers/wallet.py`(`wallet-workers` 그룹)이고, 지급은 새 경로를 만들지 않고 C-1의 `WalletService.grant(type=PURCHASE/REFUND)`를 탄다 — 갈라 두면 "잔액이 왜 이 값인가"를 두 곳에서 봐야 한다.
+>
+> **두 서비스는 코드를 공유하지 않는다.** 잇는 것은 토픽 문자열과 페이로드 계약뿐이라 `ids`·`persistence` 같은 몇 줄이 양쪽에 겹치는데, 그 중복이 경계의 값이다 — 공유 라이브러리로 묶는 순간 둘이 함께 배포된다. 계약도 양쪽에서 **따로** 검증한다(각자 자기 절반만 보면 어긋나 있어도 양쪽 다 초록이므로, 통합 테스트 하나가 실제로 브로커를 태워 그 틈을 메운다).
+
 ## 실시간 송출 — **브로드캐스터와 플랫폼을 가른다**
 
 실제 스트리밍에는 역할이 둘이다. **브로드캐스터**(스트리머 PC)가 캡처·합성·인코딩해서 RTMP로 밀고, **플랫폼**(트위치·치지직)이 ingest → 패키징 → CDN으로 시청자에게 흘린다. 채팅은 그와 별개 시스템이다.

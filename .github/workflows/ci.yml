@@ -87,10 +87,22 @@ jobs:
       - name: Tests
         run: uv run pytest
 
+      # payments는 **별도 DB**다(docs/infra.md). 서비스 컨테이너는 POSTGRES_DB 하나만
+      # 만들어 주므로 나머지 하나는 여기서 만든다 — 로컬은 compose의 init 스크립트가
+      # 같은 일을 한다.
+      - name: Create payments database
+        env:
+          PGPASSWORD: aria
+        run: psql -h localhost -U aria -d aria -c "CREATE DATABASE payments OWNER aria"
+
       # 스키마는 마이그레이션이 단일 소스다. 통합 테스트는 `create_all`을 쓰지 않으므로
       # 여기서 실패하면 마이그레이션과 모델이 어긋난 것이다.
       - name: Migrate (aria schema)
         working-directory: apps/aria
+        run: uv run alembic upgrade head
+
+      - name: Migrate (payments schema)
+        working-directory: apps/payments
         run: uv run alembic upgrade head
 
       - name: Integration tests (real Postgres·Redis·Kafka)

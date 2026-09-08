@@ -8,12 +8,12 @@ AI 페르소나 **라이브 스트리밍 플랫폼** (모노레포). 페르소�
 
 ```
 apps/
-  aria/          # 앱 모놀리스 (FastAPI, Hexagonal-Lite) — api/generation-worker/media-worker
+  aria/          # 앱 모놀리스 (FastAPI, Hexagonal-Lite) — api/generation·idle·wallet 워커
     src/aria/
       contexts/{identity,persona,chat,streaming,wallet}/{domain,application,adapter}
       common/    # shared kernel: config, EventBusPort, app(composition root)
-  payments/      # 별도 서비스 (Toss 결제 saga + outbox)
-    src/payments/{domain,application,adapter}
+  payments/      # 별도 서비스 · 별도 DB (결제 saga + outbox relay)
+    src/payments/{domain,application,adapter,workers,common}
 docs/
 ```
 
@@ -38,14 +38,30 @@ uv run pytest
 ## 로컬 인프라 (Postgres · Redis · 마이그레이션)
 
 ```bash
-docker compose up -d postgres redis   # 로컬 인프라 (docker-compose.yml)
+docker compose up -d postgres redis kafka   # 로컬 인프라 (docker-compose.yml)
 
 cd apps/aria
 uv run alembic upgrade head           # 스키마 반영 (마이그레이션이 단일 소스)
 uv run uvicorn aria.app:app --reload  # http://localhost:8000
+
+cd ../payments                        # payments는 **별도 DB**
+uv run alembic upgrade head
 ```
 
-- 접속 정보는 `config.Settings` 기본값이 compose와 일치 — 로컬은 `.env` 없이 동작(운영은 `ARIA_*`로 override, `.env.example` 참고)
+> compose를 처음 띄우면 `payments` DB가 init 스크립트로 만들어집니다. **이미 쓰던 볼륨**이라면 한 번만:
+> `docker compose exec postgres psql -U aria -d aria -c "CREATE DATABASE payments OWNER aria"`
+
+워커들(각각 별도 프로세스, 같은 이미지·다른 진입점):
+
+```bash
+uv run faststream run aria.workers.generation:app   # 응답 생성
+uv run python -m aria.workers.idle                  # 진행 루프(자율발화·방 정리)
+uv run faststream run aria.workers.wallet:app       # 결제 크레딧 반영
+uv run payments                                     # 결제 API (:8001)
+uv run python -m payments.workers.outbox            # outbox relay
+```
+
+- 접속 정보는 `config.Settings` 기본값이 compose와 일치 — 로컬은 `.env` 없이 동작(운영은 aria=`ARIA_*` / payments=`PAYMENTS_*`로 override, `.env.example` 참고)
 - 스키마 변경 시 모델 수정 후 `uv run alembic revision --autogenerate -m "..."` → 생성된 마이그레이션 검토 → `upgrade head` (생성물은 ruff로 자동 정리됨)
 - 테스트는 인메모리 SQLite·fakeredis라 위 인프라 없이 `uv run pytest`로 실행됨 (통합 테스트는 기본 실행에서 빠져 있음)
 - 그래서 **실제 브로커·DB를 타야만 보이는 것**(pub/sub 구독 수, Postgres의 tz-aware 시각, Kafka 발행)은 유닛 테스트가 못 본다. `integration` 마커가 붙은 테스트가 그 부분을 방송 수명주기로 훑는다 — 인프라(Kafka 포함)와 `alembic upgrade head`가 먼저 필요:

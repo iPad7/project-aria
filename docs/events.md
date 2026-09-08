@@ -49,8 +49,18 @@
 
 | 토픽 | producer | consumer group | key | 페이로드 |
 |---|---|---|---|---|
-| `payments.credit-purchase-confirmed` | payments (outbox relay) | wallet-workers | user_id | payment_id, user_id, credits, idempotency_key, confirmed_at |
-| `payments.credit-refunded` | payments (outbox relay) | wallet-workers | user_id | payment_id, user_id, credits, refunded_at |
+| `payments.credit-purchase-confirmed` | payments (outbox relay) | wallet-workers | user_id | v, payment_id, user_id, credits, idempotency_key, confirmed_at |
+| `payments.credit-refunded` | payments (outbox relay) | wallet-workers | user_id | v, payment_id, user_id, credits, idempotency_key, refunded_at |
+
+> **환불에도 `idempotency_key`가 있다.** 이전 판의 표에는 확정에만 있었는데, 재전달은 두 토픽 모두에 일어난다 — 회수만 멱등하지 않으면 중복 전달이 잔액을 두 번 깎는다.
+>
+> **키는 `payment:{payment_id}:purchase` / `:refund`로 파생한다.** 발행할 때마다 새로 만들면(uuid) 재발행된 두 메시지가 다른 키를 실어 원장의 유일 제약이 아무것도 막지 못한다 — at-least-once에서 그건 곧 이중 지급이다. 지급과 회수가 **같은** 키를 써도 안 된다: 회수가 "이미 적용됨"으로 조용히 무시된다.
+>
+> **`credits`는 언제나 양수이고 부호는 토픽이 정한다.** 소비자가 `TransactionType`(purchase/refund)으로 부호를 붙이며, 어긋난 조합은 wallet 도메인이 막는다.
+
+> **소비자는 `ACK`(at-least-once) 둘 다.** 생성 쪽은 토픽마다 의미론을 갈랐지만(아래 "전달 의미론") 여기는 갈릴 여지가 없다 — 크레딧이 조용히 사라지면 돈을 낸 사람의 잔액이 비는 일이고, 그건 "그 말엔 답을 안 했네"와 비교할 수 있는 손실이 아니다. 멱등은 Redis claim이 아니라 **원장의 유일 제약**이 책임진다: claim을 겹치면 진실이 둘이 되고, claim이 남은 채 DB가 롤백된 순간 그 지급은 영영 안 들어간다.
+
+> **파티션 선언은 양쪽이 한다.** 종단 확인에서 `credit-purchase-confirmed`만 파티션 1개로 생겨 있었다 — relay가 먼저 발행해 브로커가 자동 생성했고, 소비자 쪽 선언은 **이미 생긴 토픽의 파티션을 바꾸지 않기 때문**이다(그건 키→파티션 매핑을 흔들어 순서 보장을 끊는다). 데이터를 만드는 쪽이 payments라 발행이 거의 언제나 먼저다. 그래서 producer(payments)와 consumer(aria)가 **둘 다** 선언한다 — 멱등이라 겹쳐도 무해하고, 누가 먼저 뜨든 3개가 된다.
 
 ---
 
@@ -81,7 +91,12 @@
 - **멱등**: `msg_id`를 Redis `SET NX`로 **claim**한다(생성) / `idempotency_key`(크레딧). "봤음" 표시가 아니라 claim이라는 점이 중요하다 — 잡고 → 처리하고 → **실패하면 놓는다**. 표시만 남기면 일시 실패가 영구 유실이 되어 at-least-once로 바꾼 의미가 사라진다. TTL(기본 1시간)은 재전달 창보다 길고, 사람이 DLQ를 보는 주기보다는 짧다. 워커가 DB를 모른다는 설계를 지키려고 Redis에 둔다 — 슬롯이 이미 Redis에 있으므로 새 의존도 아니다.
 - **순서**: 같은 `key`(room_id·user_id)는 같은 파티션 → 순서 보장.
 - **파티션 수는 코드가 선언한다**(`common/topics.py`, 파티션 3). 자동 생성에 맡기면 1개가 되어 워커를 몇 대 띄우든 하나만 일한다 — consumer group은 파티션 단위로 나눠 갖기 때문이다. **기존 토픽의 파티션은 늘리지 않는다**: 늘리면 키→파티션 매핑이 바뀌어 같은 방의 과거·미래 메시지가 다른 파티션에 가고 순서 보장이 그 지점에서 끊긴다. 운영자가 알고 하는 편이 낫다.
-- **outbox** (payments): `payment` 상태변경 + `outbox` 로우를 **한 로컬 트랜잭션**에 기록 → relay가 `outbox`를 폴링/CDC로 Kafka 발행 → `published`로 마킹. 이중발행·유실 방지.
+- **outbox** (payments): `payment` 상태변경 + `outbox` 로우를 **한 로컬 트랜잭션**에 기록 → relay가 `outbox`를 **폴링**으로 읽어 Kafka 발행 → `published_at` 마킹. 유실 방지.
+  > **outbox가 하는 일은 유실을 중복으로 바꾸는 것이다.** DB 커밋과 브로커 발행은 한 트랜잭션이 될 수 없다 — 커밋 후 발행하면 그 사이에 죽었을 때 *결제는 됐는데 크레딧이 없고*, 발행 후 커밋하면 *크레딧은 줬는데 결제 기록이 없다*. 로우로 함께 커밋해 두면 둘 다 일어나지 않고, 남는 위험은 중복 발행뿐이며 그건 소비자 멱등키가 흡수한다.
+  >
+  > **relay는 발행 → 마킹 순서다.** 뒤집으면(마킹 → 발행) 그 사이에 죽은 메시지를 아무도 다시 보내지 않는다 — 위의 교환이 성립하지 않는다. **한 건씩 표시**해 재발행 폭을 1로 묶고, 한 건이 실패하면 **거기서 멈춘다**(건너뛰면 같은 사용자의 지급과 회수가 뒤바뀔 수 있다).
+  >
+  > **CDC가 아니라 폴링으로 확정했다**(#71). Debezium 한 벌을 세우지 않고 시작할 수 있고, `published_at IS NULL` **부분 인덱스**면 이 규모에 충분하다 — 발행된 로우는 쌓이기만 하므로 조건을 걸지 않으면 그 죽은 무게를 매초 끌고 다닌다. 지연은 폴링 주기(`PAYMENTS_OUTBOX_POLL_SECONDS`, 기본 1초)만큼이며, CDC는 그 지연이 실측으로 문제가 됐을 때 같은 자리에 갈아 끼운다.
 - **DLQ**: **재시도 0회**, 실패 즉시 `<topic>.dlq`. 원본 페이로드 + `original_topic`·`failed_at`·`error`를 함께 싣고, 키는 원본과 같아 DLQ에서도 방별 순서가 남는다. 사람이 보고 판단한다(후원이면 환불이든 재처리든).
   > **왜 재시도하지 않나.** ① 인프로세스 재시도는 파티션을 막는다(head-of-line blocking) — 같은 방의 뒤 메시지가 앞 메시지의 백오프를 기다린다. ② 30초 뒤에 성공한 응답은 이미 늦었다. at-least-once의 값은 "늦게라도 성공"이 아니라 **"조용히 사라지지 않는다"**에 있다. 자동 재시도로 한참 뒤에 감사 응답이 튀어나오는 것이 오히려 이상하다.
 - **스키마 버저닝**: 페이로드에 `v` 필드. 지금은 `v: 1`이고, **모르는 버전은 추측하지 않고 DLQ로 보낸다** — 필드가 바뀐 메시지를 옛 코드가 반쯤 읽어 이상한 응답을 내보내는 것이 최악이다. `v`가 없는 페이로드는 1로 본다(C-4-2 이전에 발행돼 큐에 남아 있던 것). 소비자가 아직 우리 자신뿐일 때가 넣는 비용이 가장 싼 시점이라 미리 넣었다.
@@ -185,5 +200,6 @@ api는 요청을 접수하고 **표시할 것을 발행한 뒤** 생성을 큐�
 
 ## 미확정
 
-- payments outbox relay(폴링 vs CDC), 운영 파티션·복제 수(IaC), DLQ 재처리 도구
+- 운영 파티션·복제 수(IaC), DLQ 재처리 도구, Toss 실연동(게이트웨이 포트 뒤 stub이 기본)
+  > payments outbox relay의 폴링 vs CDC는 **폴링으로 확정**했다(#71, 위 "전달 의미론").
   > DLQ 재시도 정책·스키마 버저닝·개발 파티션 수는 C-4-2에서 확정했다(위 "전달 의미론").

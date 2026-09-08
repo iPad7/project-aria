@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     kafka_bootstrap_servers: str = "localhost:9092"
     # Consumer group for generation workers. Scaling out = more replicas in this group.
     generation_consumer_group: str = "generation-workers"
+    # Credit events from the payments service (outbox relay -> Kafka). A separate group
+    # from generation: both scale, but for unrelated reasons (LLM load vs payment volume).
+    wallet_consumer_group: str = "wallet-workers"
     # How long a processed-message claim lives. Must outlast the redelivery window,
     # or a redelivery arriving after expiry slips through as a duplicate reply.
     dedup_ttl_seconds: int = 3600
