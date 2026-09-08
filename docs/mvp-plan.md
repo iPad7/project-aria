@@ -55,7 +55,7 @@
 ### Phase 4 — 재현 마무리
 
 - [ ] 인증/관리자 — identity 인증은 기반 슬라이스(#8)에서 선구현. 관리자 권한(`is_staff` → JWT `staff` 클레임 → `require_staff`)은 C-1에서 선구현, 관리자 화면·잔여 인증 흐름 남음
-- [ ] 후원(토스) — wallet · payments 경계. **wallet 컨텍스트(잔액·원장·후원 기록)는 C-1, 후원 종단(FR-PAY-3·FR-GEN-6)은 C-2에서 완료** — 결제 확정 이벤트가 붙을 지급 경로(`WalletService.grant(type=PURCHASE)`)까지 열어 둠. 남은 것은 payments 서비스와 outbox relay
+- [ ] 후원(토스) — wallet · payments 경계. **wallet 컨텍스트(잔액·원장·후원 기록)는 C-1, 후원 종단(FR-PAY-3·FR-GEN-6)은 C-2에서 완료.** payments 서비스와 **outbox relay는 #71에서 완료** — 결제 확정/환불이 한 로컬 트랜잭션으로 outbox에 남고, relay가 폴링으로 Kafka에 내보내면 aria의 `wallet-workers`가 멱등 소비해 C-1에서 열어 둔 `WalletService.grant(type=PURCHASE/REFUND)`를 탄다. 남은 것은 **Toss 실연동**(게이트웨이 포트 뒤 stub이 기본)과 결제 화면
 
 ## 이후 (ML 플랫폼 / 확장)
 

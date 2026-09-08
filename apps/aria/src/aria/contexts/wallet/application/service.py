@@ -40,10 +40,12 @@ class WalletService:
     ) -> int:
         """크레딧을 지급하고 적용 후 잔액을 돌려준다.
 
-        지금 호출자는 관리자 엔드포인트뿐이지만, payments의 결제 확정 이벤트도
-        `type=PURCHASE`로 같은 경로를 타게 된다(Phase 4) — 지급 경로를 하나로 둔다.
+        관리자 엔드포인트와 payments의 결제 확정·환불 이벤트가 함께 쓴다 — 지급
+        경로를 하나로 둔다.
 
-        `credits`가 0 이하면 도메인 검증(`CreditTransaction`)이 막는다.
+        **부호는 `type`이 정한다.** `credits`를 그대로 `delta`로 넘기고, 타입과 부호가
+        맞는지는 도메인(`CreditTransaction`)이 본다 — 회수(`REFUND`)는 음수라야 하고
+        지급(`PURCHASE`·`GRANT`)은 양수라야 한다. 0은 어느 쪽도 아니라 막힌다.
         """
         entry = CreditTransaction(
             user_id=user_id,

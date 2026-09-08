@@ -1104,8 +1104,10 @@ dependencies = [
     { name = "fastapi" },
     { name = "faststream", extra = ["kafka"] },
     { name = "httpx" },
+    { name = "psycopg", extra = ["binary"] },
     { name = "pydantic-settings" },
     { name = "sqlmodel" },
+    { name = "uuid-utils" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -1115,8 +1117,10 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.141.1" },
     { name = "faststream", extras = ["kafka"], specifier = ">=0.7.2" },
     { name = "httpx", specifier = ">=0.28.1" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.3.4" },
     { name = "pydantic-settings", specifier = ">=2.14.2" },
     { name = "sqlmodel", specifier = ">=0.0.39" },
+    { name = "uuid-utils", specifier = ">=0.10.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.51.0" },
 ]
 

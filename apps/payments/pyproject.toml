@@ -11,6 +11,8 @@ dependencies = [
     "httpx>=0.28.1",
     "pydantic-settings>=2.14.2",
     "faststream[kafka]>=0.7.2",
+    "psycopg[binary]>=3.3.4",
+    "uuid-utils>=0.10.0",
 ]
 
 [project.scripts]

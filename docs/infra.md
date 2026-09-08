@@ -28,6 +28,8 @@
 
 `docker-compose.yml`: `postgres` · `redis` · `kafka`(KRaft 단일노드). aria/payments는 이미지 확정 후 추가. inference·llmops·SigNoz는 필요 시 개별 기동.
 
+- **DB는 둘이다** — `aria`와 `payments`. compose의 init 스크립트(`docker/postgres-init/`)가 후자를 만들지만 **볼륨이 비어 있을 때만** 실행되므로, 이미 쓰던 로컬에는 `CREATE DATABASE payments OWNER aria;`를 한 번 직접 돌린다(README). 운영은 별도 인스턴스.
+
 - 추론: 로컬은 GPU 없이 **OpenAI fallback**(`PersonaLLMPort`) 사용 → inference 컨테이너 불필요.
 - 미디어: 로컬은 nginx로 HLS 서빙(운영 CDN 대체).
 - **CI도 같은 셋을 쓴다** — GitHub Actions 서비스 컨테이너로 같은 이미지·같은 포트를 띄워 `pytest -m integration`을 돌린다(`docs/github-workflow.md`). 로컬에서 본 것과 CI가 보는 것을 어긋나지 않게 두기 위해서다.

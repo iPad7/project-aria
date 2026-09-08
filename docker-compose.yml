@@ -7,7 +7,11 @@ services:
       POSTGRES_PASSWORD: aria
       POSTGRES_DB: aria
     ports: ["5432:5432"]
-    volumes: [pgdata:/var/lib/postgresql/data]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # payments DB를 만든다. **볼륨이 비어 있을 때만 돈다** — 이미 초기화된 로컬에는
+      # 적용되지 않으므로, 그럴 땐 README의 한 줄짜리 CREATE DATABASE를 쓴다.
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
     # payments는 별도 DB — 운영은 별도 인스턴스, 로컬은 같은 서버에 DB 분리
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U aria -d aria"]
