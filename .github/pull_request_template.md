@@ -11,7 +11,7 @@ Closes #
 ## 체크리스트
 
 - [ ] PR 제목 `<type>: 요약` · 커밋 `<type>: 세부` (스코프 없음)
-- [ ] CI green (ruff · format · lint-imports · pytest · build)
+- [ ] CI green (ruff · format · lint-imports · pytest · alembic · pytest -m integration · build)
 - [ ] 경계 유지 (컨텍스트 독립 · `application ↛ adapter` · 커널 순수성)
 - [ ] `docs/` 갱신 (구조/계약 변경 시)
 - [ ] 위키 등 repo 밖 사설 문서 역참조 없음
