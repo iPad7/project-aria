@@ -21,9 +21,12 @@ from aria.contexts.chat.adapter.inbound.deps import (
     get_activity_tracker,
     get_chat_service,
     get_room_service,
+    get_transcript,
 )
 from aria.contexts.chat.adapter.inbound.http.schema import (
     MessageOutcomeResponse,
+    MessagePage,
+    MessageResponse,
     OpenRoomRequest,
     PostMessageRequest,
     PostSuperchatRequest,
@@ -32,6 +35,7 @@ from aria.contexts.chat.adapter.inbound.http.schema import (
     SuperchatOutcomeResponse,
 )
 from aria.contexts.chat.application.port.out.activity import ActivityTracker
+from aria.contexts.chat.application.port.out.transcript import TranscriptRepository
 from aria.contexts.chat.application.room import MAX_PAGE_SIZE, RoomService
 from aria.contexts.chat.application.service import ChatOrchestrationService
 from aria.contexts.chat.domain.room import Room, RoomStatus
@@ -173,6 +177,40 @@ async def post_superchat(
     )
     return SuperchatOutcomeResponse(
         donation_id=outcome.donation_id, balance_after=outcome.balance_after
+    )
+
+
+@router.get("/{room_id}/messages", response_model=MessagePage)
+async def room_messages(
+    room_id: UUID,
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    transcript: Annotated[TranscriptRepository, Depends(get_transcript)],
+    limit: int = 50,
+    before: UUID | None = None,
+) -> MessagePage:
+    """방에서 오간 것을 최신순으로.
+
+    **방 상태를 보지 않는다.** 끝난 방송의 기록도 읽을 수 있어야 한다 — 그게 다시보기의
+    최소 형태이고, 라이브만 읽게 하면 방송이 끝나는 순간 기록이 사라지는 것과 같다.
+    """
+    messages = await transcript.list_recent(room_id, limit=limit, before=before)
+    return MessagePage(
+        messages=[
+            MessageResponse(
+                id=m.id,
+                kind=m.kind.value,
+                text=m.text,
+                author_id=m.author_id,
+                persona_id=m.persona_id,
+                source=m.source.value if m.source else None,
+                amount=m.amount,
+                replied_to=m.replied_to,
+                created_at=m.created_at,
+            )
+            for m in messages
+        ],
+        # 한 페이지를 꽉 채웠을 때만 다음이 있을 수 있다. 덜 찼으면 끝이다.
+        next_before=messages[-1].id if len(messages) == limit else None,
     )
 
 

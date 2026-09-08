@@ -33,6 +33,8 @@ from aria.contexts.chat.application.persona_prompt import system_message
 from aria.contexts.chat.application.port.out.broadcast import RoomBroadcaster
 from aria.contexts.chat.application.port.out.coordinator import ResponseCoordinator
 from aria.contexts.chat.application.port.out.llm import Message, PersonaLLMPort
+from aria.contexts.chat.application.port.out.transcript import TranscriptRepository
+from aria.contexts.chat.domain.message import RoomMessage
 from aria.contexts.chat.domain.source import ChatSource
 
 # durable 토픽. 슈퍼챗이 별도 토픽인 것은 `docs/events.md`의 결정 그대로다 — 다만
@@ -164,12 +166,14 @@ class ResponseGenerationService:
         broadcaster: RoomBroadcaster,
         profiles: PersonaProfilePort,
         tracing: TracingPort,
+        transcript: TranscriptRepository,
     ) -> None:
         self._coordinator = coordinator
         self._llm = llm
         self._broadcaster = broadcaster
         self._profiles = profiles
         self._tracing = tracing
+        self._transcript = transcript
 
     async def handle(self, request: GenerationRequest) -> None:
         # 바깥 span. 어댑터가 못 보는 맥락(어느 방·무엇이 촉발·중복인지)이 여기 있고,
@@ -230,6 +234,10 @@ class ResponseGenerationService:
                 # 이 표시가 특히 쓸모 있다: **버려진 생성의 비용**이 보인다.
                 trace.set_metadata({"outcome": "preempted"})
                 return
+            # **발행 전에 남긴다.** 순서를 뒤집으면 기록이 실패했을 때 시청자는 이미
+            # 본 말이 히스토리에 없다 — 새로고침하면 사라지는 응답이 된다. 반대로
+            # 기록이 먼저면 최악이 "남았는데 못 나간 응답"이고, 그건 조용하다.
+            await self._record(request, result.text, result.model_version)
             await self._broadcaster.publish(
                 request.room_id,
                 {
@@ -246,3 +254,27 @@ class ResponseGenerationService:
             trace.set_metadata({"outcome": "published"})
         finally:
             await self._coordinator.release(request.room_id, slot)
+
+    async def _record(
+        self, request: GenerationRequest, text: str, model_version: str | None
+    ) -> None:
+        """응답을 기록에 남긴다. 실패해도 방송은 계속된다.
+
+        `replied_to`가 **학습 쌍의 연결선**이다 — 이 응답이 어느 시청자 메시지에 답한
+        것인지. 자율발화·사연 낭독은 답할 대상이 없어 비어 있고, 그 구분 자체가
+        데이터셋을 거를 때 필요하다.
+        """
+        replied_to = (request.selection or {}).get("selected_message_id")
+        try:
+            await self._transcript.append(
+                RoomMessage.from_persona(
+                    request.room_id,
+                    request.persona_id,
+                    request.source,
+                    text,
+                    model_version=model_version,
+                    replied_to=UUID(replied_to) if replied_to else None,
+                )
+            )
+        except Exception:  # noqa: BLE001 - 기록 실패가 방송을 끊지 않는다
+            logger.exception("응답 기록 실패 room_id=%s", request.room_id)

@@ -222,4 +222,9 @@ def _selection_metadata(progress: Progress) -> dict[str, object] | None:
         "topics": progress.topic_count,
         "selected_score": progress.selection.score,
         "selected_reasons": list(progress.selection.reasons),
+        # **어느 댓글이었나.** 이전 판에는 개수·점수·이유만 있어 "왜 골랐나"에는
+        # 답해도 "무엇에 답한 것인가"에는 답하지 못했다. 기록의 `replied_to`가 이
+        # 값을 받아 학습 쌍의 연결선이 된다(#73).
+        "selected_message_id": str(progress.selection.candidate.message_id),
+        "selected_author_id": str(progress.selection.candidate.author_id),
     }

@@ -125,3 +125,65 @@ def test_room_state_reflects_activity(client: TestClient) -> None:
     after = client.get(f"/rooms/{room}/state", headers=headers).json()
     assert after["idle"] is False
     assert after["seconds_since_last"] is not None
+
+
+# --- 히스토리 (#73) ----------------------------------------------------------
+
+
+async def test_the_room_history_is_readable_after_the_fact(client: TestClient) -> None:
+    """새로고침해도 방이 비지 않는다 — 전에는 Redis에만 있어 통째로 사라졌다."""
+    persona = uuid4()
+    room = live_room(client, persona)
+    for text in ("첫 마디", "둘째 마디"):
+        client.post(
+            f"/rooms/{room}/messages",
+            json={"persona_id": str(persona), "text": text},
+            headers=_auth_header(),
+        )
+
+    resp = client.get(f"/rooms/{room}/messages", headers=_auth_header())
+
+    assert resp.status_code == 200
+    body = resp.json()
+    # 최신순.
+    assert [m["text"] for m in body["messages"]] == ["둘째 마디", "첫 마디"]
+    assert all(m["kind"] == "chat" for m in body["messages"])
+
+
+async def test_the_history_pages_with_a_cursor(client: TestClient) -> None:
+    """오프셋이 아니라 커서다 — 방송 중에는 새 메시지가 들어와 오프셋이 밀린다."""
+    persona = uuid4()
+    room = live_room(client, persona)
+    for i in range(3):
+        client.post(
+            f"/rooms/{room}/messages",
+            json={"persona_id": str(persona), "text": f"메시지 {i}"},
+            headers=_auth_header(),
+        )
+
+    first = client.get(f"/rooms/{room}/messages?limit=2", headers=_auth_header()).json()
+    second = client.get(
+        f"/rooms/{room}/messages?limit=2&before={first['next_before']}",
+        headers=_auth_header(),
+    ).json()
+
+    assert [m["text"] for m in first["messages"]] == ["메시지 2", "메시지 1"]
+    assert [m["text"] for m in second["messages"]] == ["메시지 0"]
+    # 덜 찬 페이지는 끝이다.
+    assert second["next_before"] is None
+
+
+async def test_a_finished_room_still_has_its_history(client: TestClient) -> None:
+    """다시보기의 최소 형태 — 방송이 끝났다고 기록이 사라지면 안 된다."""
+    persona = uuid4()
+    room = live_room(client, persona)
+    client.post(
+        f"/rooms/{room}/messages",
+        json={"persona_id": str(persona), "text": "방송 중에 한 말"},
+        headers=_auth_header(),
+    )
+    client.post(f"/rooms/{room}/finish", headers=_auth_header())
+
+    resp = client.get(f"/rooms/{room}/messages", headers=_auth_header())
+
+    assert [m["text"] for m in resp.json()["messages"]] == ["방송 중에 한 말"]

@@ -28,6 +28,7 @@ from aria.contexts.chat.application.generation import (
     GenerationRequest,
     ResponseGenerationService,
 )
+from aria.contexts.chat.domain.message import RoomMessage
 
 
 class DirectEventBus:
@@ -77,7 +78,29 @@ class StubProfiles:
         return self._profile
 
 
-def direct_bus(redis: Redis) -> DirectEventBus:
+class RecordingTranscript:
+    """`TranscriptRepository` 인메모리 구현 — 무엇이 남았는지만 본다.
+
+    기록의 실제 SQL은 `test_transcript.py`가 인메모리 SQLite로 따로 본다. 여기서는
+    "유스케이스가 남기기는 하는가"만 보면 되므로 DB를 끌어들이지 않는다.
+    """
+
+    def __init__(self) -> None:
+        self.appended: list[RoomMessage] = []
+
+    async def append(self, message: RoomMessage) -> None:
+        self.appended.append(message)
+
+    async def list_recent(
+        self, room_id: UUID, *, limit: int = 50, before: UUID | None = None
+    ) -> list[RoomMessage]:
+        rows = [m for m in self.appended if m.room_id == room_id]
+        return list(reversed(rows))[:limit]
+
+
+def direct_bus(
+    redis: Redis, transcript: RecordingTranscript | None = None
+) -> DirectEventBus:
     """워커의 조립을 테스트용 Redis 하나로 재현한다 — `workers/generation.py`와 같은 모양."""
     return DirectEventBus(
         ResponseGenerationService(
@@ -86,5 +109,6 @@ def direct_bus(redis: Redis) -> DirectEventBus:
             broadcaster=RedisRoomBroadcaster(redis),
             profiles=StubProfiles(),
             tracing=NoOpTracing(),
+            transcript=transcript or RecordingTranscript(),
         )
     )

@@ -27,6 +27,9 @@ from aria.contexts.chat.adapter.inbound.worker.router import (
     GenerationConsumer,
 )
 from aria.contexts.chat.adapter.outbound.inference.factory import build_llm
+from aria.contexts.chat.adapter.outbound.persistence.transcript import (
+    SqlModelTranscriptRepository,
+)
 from aria.contexts.chat.adapter.outbound.redis.broadcast import RedisRoomBroadcaster
 from aria.contexts.chat.adapter.outbound.redis.coordinator import (
     RedisResponseCoordinator,
@@ -69,6 +72,9 @@ def create_app() -> FastStream:
         broadcaster=RedisRoomBroadcaster(redis),
         profiles=profiles,
         tracing=tracing,
+        # 응답도 기록에 남는다(#73). 프로필을 읽느라 이미 DB를 알고 있으므로 새 의존이
+        # 아니고, 여기가 응답 텍스트를 아는 유일한 자리다.
+        transcript=SqlModelTranscriptRepository(session),
     )
     # 배달 보증(멱등·DLQ)은 어댑터가 입힌다 — 위 서비스는 그런 게 있는 줄 모른다.
     consumer = GenerationConsumer(

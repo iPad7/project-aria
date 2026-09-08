@@ -28,12 +28,15 @@ from uuid import UUID, uuid4
 
 import pytest
 import pytest_asyncio
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from aria.common.config import settings
-from aria.common.db import engine
+from aria.common.db import engine as aria_engine
 from aria.common.redis import get_redis
-from aria.contexts.chat.adapter.outbound.persistence.model import RoomTable
+from aria.contexts.chat.adapter.outbound.persistence.model import (
+    MessageTable,
+    RoomTable,
+)
 from aria.contexts.chat.adapter.outbound.redis.broadcast import room_channel
 from aria.contexts.chat.application.abandon import AbandonedRoomCloser
 from aria.contexts.chat.application.progress import ProgressService
@@ -87,8 +90,14 @@ def cleanup_rooms() -> Iterator[list[UUID]]:
     """
     created: list[UUID] = []
     yield created
-    with Session(engine) as session:
+    with Session(aria_engine) as session:
         for room_id in created:
+            # 기록이 먼저다 — 방을 지워도 메시지는 FK가 없어 남는다(그게 보존
+            # 정책의 자유이기도 하다). 여기서는 테스트가 만든 것을 스스로 치운다.
+            for message in session.exec(
+                select(MessageTable).where(MessageTable.room_id == room_id)
+            ).all():
+                session.delete(message)
             row = session.get(RoomTable, room_id)
             if row is not None:
                 session.delete(row)
@@ -169,3 +178,48 @@ async def test_an_abandoned_room_closes_itself(
     # 문턱을 내려 둔 채로 돌리면 개발 DB에 살아 있던 남의 방까지 닫아 버린다.
     live = await rooms.list_live(limit=100)
     assert room.id not in {r.id for r in live}
+
+
+# --- 기록 (#73) --------------------------------------------------------------
+
+
+async def test_the_transcript_survives_a_real_database(
+    wired: Wiring, open_live_room: Callable[[str], Awaitable[Room]]
+) -> None:
+    """기록이 **실제 Postgres**에서 순서대로 남고 tz-aware로 돌아온다.
+
+    유닛 테스트는 인메모리 SQLite라 `created_at`이 naive로 돌아온다 — 그 차이가
+    방치 판정을 터뜨린 적이 있으므로(위 `closed_at`), 기록의 시각도 같은 경로를
+    실제로 태워 본다. `id DESC` 부분 정렬 인덱스가 SQLite에서만 도는 것도 아니다.
+    """
+    from aria.contexts.chat.adapter.outbound.persistence.transcript import (
+        SqlModelTranscriptRepository,
+    )
+    from aria.contexts.chat.domain.message import MessageKind, RoomMessage
+    from aria.contexts.chat.domain.source import ChatSource
+
+    rooms, _, _ = wired
+    room = await open_live_room("기록이 남는 방")
+
+    with Session(aria_engine) as session:
+        transcript = SqlModelTranscriptRepository(session)
+        asked = RoomMessage.from_viewer(room.id, uuid4(), "실제 DB에 남나요?")
+        await transcript.append(asked)
+        await transcript.append(
+            RoomMessage.from_persona(
+                room.id,
+                room.persona_id,
+                ChatSource.CHAT,
+                "남습니다",
+                model_version="stub-1",
+                replied_to=asked.id,
+            )
+        )
+
+        stored = await transcript.list_recent(room.id)
+
+    assert [m.kind for m in stored] == [MessageKind.REPLY, MessageKind.CHAT]
+    # 학습 쌍의 연결선이 왕복에서 살아남는다.
+    assert stored[0].replied_to == asked.id
+    # Postgres는 tz-aware로 돌려준다. SQLite는 naive라 유닛에는 이 경로가 없다.
+    assert stored[0].created_at.tzinfo is not None

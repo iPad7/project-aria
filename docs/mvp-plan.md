@@ -18,7 +18,7 @@
   1. ~~**페르소나 해석**~~ — **완료**(#59·#67). `communication_style` + `core_value`(우선순위 M:N)를 만들고, `PersonaProfilePort`로 chat에 건너가 시스템 프롬프트가 됩니다. 관측성이 붙은 뒤 `moral_compass`(판단 기준·원칙 준수·공정)를 별도 문단으로 얹었습니다(#67). `personality_trait`는 나침반의 효과를 `has_compass` 트레이스로 확인한 뒤에 판단합니다
   2. ~~**댓글 선별**~~ — **완료**(#63). 토픽 군집화(문자 n-gram, 포트 뒤) + 점수 기반 선별(질문·길이·활성 토픽). 임베딩은 같은 포트 뒤에 나중에 꽂습니다
   3. **관측성/평가** — LLM 레이어(Langfuse) **완료**(#61). 프롬프트·응답·`model_version`·지연에 더해 맥락(어느 방·무엇이 촉발·프로필 유무·**버려진 생성**)까지 남습니다. 시스템 레이어(OTel→SigNoz)는 아직 부하가 없어 미룹니다. 이 관측성이 열어 준 것이 1번의 나머지 절반입니다 — `moral_compass`가 #67에서 `has_compass` 속성과 함께 들어갔고, `personality_trait`는 그 관측 결과로 판단합니다
-  4. **ML 플랫폼** — SFT · DPO · 평가 · 레지스트리
+  4. **ML 플랫폼** — SFT · DPO · 평가 · 레지스트리. **선행 조건이던 학습 데이터는 #73에서 열렸다** — 그전까지 aria에는 오간 말이 한 줄도 남지 않았다(채팅은 Redis 후보 버퍼 TTL, 응답은 pub/sub 휘발). 이제 `chat_message`가 시청자 채팅·응답·`replied_to` 연결선까지 남기므로 "이 입력에 이렇게 답했다"는 쌍을 뽑을 수 있다. 데이터셋 export 포맷은 그쪽 repo의 몫
   5. **미디어 송출** — 데모가 필요해질 때. **브로드캐스터를 분리했으므로 그때 aria는 바뀌지 않습니다**(`docs/architecture.md`), 그래서 미룰 수 있는 결정이 됐습니다
 
 ## 기능 로드맵
@@ -34,7 +34,7 @@
 - [x] persona 도메인(CRUD·소유권) — `name`/`tagline`/`description` 수준
 - [ ] persona 레거시 스키마 계승 — `core_value`(M:N)·`communication_style` **완료**(#59, 프롬프트 해석까지) · `moral_compass` **완료**(#67). `personality_trait`는 나침반의 효과를 본 뒤, `tts_settings`는 브로드캐스터 쪽
 - [x] 방(Room) — 개설·상태(pending/live/finished)·라이브 유일성. 채팅·후원·WS가 라이브 방에서만 된다. idle 루프와 미디어 송출(`hls_url`)의 전제
-- [ ] 토픽스레드 · MediaPacket/seq · 응답선별
+- [ ] 토픽스레드 · MediaPacket/seq · 응답선별 — **응답선별 완료**(#63), 대화 기록 영속화 완료(#73). 토픽스레드·MediaPacket은 미디어 송출과 함께
 - [x] WebSocket 채팅 수신·브로드캐스트 (Redis pub/sub 백플레인)
 - [x] 세션/큐·조율 상태 Redis 외부화
 

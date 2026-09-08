@@ -27,12 +27,16 @@ from aria.common.superchat import SuperchatPort
 from aria.contexts.chat.adapter.outbound.persistence.repository import (
     SqlModelRoomRepository,
 )
+from aria.contexts.chat.adapter.outbound.persistence.transcript import (
+    SqlModelTranscriptRepository,
+)
 from aria.contexts.chat.adapter.outbound.redis.activity import RedisActivityTracker
 from aria.contexts.chat.adapter.outbound.redis.broadcast import RedisRoomBroadcaster
 from aria.contexts.chat.adapter.outbound.redis.candidates import RedisCandidateBuffer
 from aria.contexts.chat.application.generation import GenerationRequestPublisher
 from aria.contexts.chat.application.port.out.activity import ActivityTracker
 from aria.contexts.chat.application.port.out.broadcast import RoomBroadcaster
+from aria.contexts.chat.application.port.out.transcript import TranscriptRepository
 from aria.contexts.chat.application.room import RoomService
 from aria.contexts.chat.application.service import ChatOrchestrationService
 
@@ -61,18 +65,29 @@ def get_event_bus() -> EventBusPort:
     return KafkaEventBus(get_broker())
 
 
+def get_transcript(
+    session: Annotated[Session, Depends(get_session)],
+) -> TranscriptRepository:
+    return SqlModelTranscriptRepository(session)
+
+
 def get_chat_service(
     redis: Annotated[Redis, Depends(get_redis)],
     superchat: Annotated[SuperchatPort, Depends(get_superchat)],
     events: Annotated[EventBusPort, Depends(get_event_bus)],
+    transcript: Annotated[TranscriptRepository, Depends(get_transcript)],
 ) -> ChatOrchestrationService:
     # 코디네이터·LLM은 여기 없다 — 생성은 워커의 일이라 api는 둘 다 모른다.
+    #
+    # **api가 DB를 하나 더 알게 됐다**(#73). 기록은 요청 경로에서 동기로 쓴다 —
+    # Kafka 경유 archiver는 토픽과 워커를 새로 만드는데 부하가 실측된 적이 없다.
     return ChatOrchestrationService(
         activity=RedisActivityTracker(redis),
         broadcaster=RedisRoomBroadcaster(redis),
         generation=GenerationRequestPublisher(events),
         superchat=superchat,
         candidates=RedisCandidateBuffer(redis),
+        transcript=transcript,
     )
 
 
