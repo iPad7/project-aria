@@ -14,7 +14,12 @@ from uuid import UUID, uuid4
 
 import pytest
 from fakeredis import FakeAsyncRedis, FakeServer
-from generation_harness import RecordingEventBus, StubProfiles, direct_bus
+from generation_harness import (
+    RecordingEventBus,
+    RecordingTranscript,
+    StubProfiles,
+    direct_bus,
+)
 from room_harness import live_room
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
@@ -394,6 +399,7 @@ async def test_preempted_reply_is_never_published(redis: FakeAsyncRedis) -> None
         broadcaster=broadcaster,
         profiles=StubProfiles(),
         tracing=NoOpTracing(),
+        transcript=RecordingTranscript(),
     )
 
     await worker.handle(_request(room))
@@ -411,6 +417,7 @@ async def test_unpreempted_reply_is_published(redis: FakeAsyncRedis) -> None:
         broadcaster=(broadcaster := _RecordingBroadcaster()),
         profiles=StubProfiles(),
         tracing=NoOpTracing(),
+        transcript=RecordingTranscript(),
     )
 
     await worker.handle(_request(room))
@@ -431,6 +438,7 @@ async def test_worker_skips_generation_without_a_slot(redis: FakeAsyncRedis) -> 
         broadcaster=(broadcaster := _RecordingBroadcaster()),
         profiles=StubProfiles(),
         tracing=NoOpTracing(),
+        transcript=RecordingTranscript(),
     )
     await coordinator.try_acquire(room, ChatSource.SUPERCHAT)  # 이미 점유 중
 
@@ -451,6 +459,7 @@ async def test_worker_releases_the_slot_after_generating(
         broadcaster=_RecordingBroadcaster(),
         profiles=StubProfiles(),
         tracing=NoOpTracing(),
+        transcript=RecordingTranscript(),
     )
 
     await worker.handle(_request(room))
@@ -470,6 +479,7 @@ def _request_service(
         generation=GenerationRequestPublisher(events),
         superchat=superchat,
         candidates=_NullCandidates(),
+        transcript=RecordingTranscript(),
     )
 
 
@@ -516,6 +526,7 @@ async def test_superchat_stands_even_if_no_response_ever_comes(
         broadcaster=(worker_out := _RecordingBroadcaster()),
         profiles=StubProfiles(),
         tracing=NoOpTracing(),
+        transcript=RecordingTranscript(),
     )
     await worker.handle(GenerationRequest.from_payload(events.published[0].payload))
 

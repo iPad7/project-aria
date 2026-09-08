@@ -173,16 +173,32 @@ LIMIT ?
 
 > **방이 생기기 전에는 `room_id`가 아무 UUID나 됐다.** 그래서 존재하지 않는 방/페르소나에 크레딧을 태울 수 있었고, 차감은 진짜로 일어나 `wallet_donation`에 기록까지 남았다. 지금은 채팅·후원·WS가 전부 라이브 방에서만 된다.
 
-### chat_message_log  *(채팅 로그, 영구)* — **미구현**
+### chat_message  *(방 타임라인, 영구)* — **구현됨**(#73)
 | 컬럼 | 타입 | 제약/비고 |
 |---|---|---|
-| id | uuid | PK |
-| room_id | uuid | FK→chat_room, cascade |
-| sender_id | uuid | FK→user, nullable, set null |
-| content | text | not null |
-| created_at | timestamptz | index (room_id, created_at) |
+| id | uuid | PK (UUIDv7 — id 순서가 곧 시간 순서) |
+| room_id | uuid | 인덱스는 아래 복합으로 |
+| kind | varchar(20) | `chat` / `superchat` / `reply` |
+| text | varchar(2000) | 후원은 빈 문자열 가능(메시지 없는 후원) |
+| author_id | uuid | nullable — 시청자(채팅·후원). 응답이면 NULL |
+| persona_id | uuid | nullable, index — 응답·후원. **데이터셋이 페르소나 단위로 뽑힌다** |
+| source | varchar(20) | nullable — 응답이 무엇에 촉발됐나(chat/superchat/story/idle) |
+| model_version | varchar(100) | nullable — 응답을 만든 모델 |
+| amount | int | nullable — 후원에만 |
+| replied_to | uuid | nullable — **이 응답이 답한 시청자 메시지** |
+| created_at / updated_at | timestamptz | `ix_chat_message_room_id_desc` (room_id, id DESC) |
 
-> 실시간 전달은 Redis pub/sub. 이 테이블은 영구 로그(FR-CHAT-4). 방과 함께 만들지 않은 이유는 볼륨·보존정책이 얽힌 다른 관심사이기 때문이다.
+> **한 표에 셋이 산다.** 시청자 채팅·후원·페르소나 응답은 화면에서도 하나의 타임라인이고 학습 쌍도 그 순서에서 나온다. 종류별로 쪼개면 유일한 주요 질문("이 방에서 무슨 일이 있었나")이 매번 UNION이 된다. 종류마다 비는 컬럼이 있는 것은 그 대가이고, **어긋난 조합은 도메인이 막는다**(응답에 `author_id`, 채팅에 `amount` 등).
+
+> **`replied_to`가 학습 쌍의 연결선이다.** #63의 선별 결과(어느 댓글을 골랐나)가 여기 들어온다. 자율발화·사연 낭독은 답할 대상이 없어 NULL이고, 그 구분이 데이터셋을 거를 때 필요하다. **자기참조 FK를 걸지 않는다** — 보존 정책으로 옛 메시지를 지울 때 응답까지 막거나 끌고 간다.
+
+> **왜 이제야 만들었나.** 방과 함께 만들지 않은 이유는 볼륨·보존정책이 얽힌 다른 관심사였기 때문인데, 미루는 동안 두 가지가 드러났다: 새로고침하면 방이 통째로 비었고(실시간 전달이 Redis pub/sub이라), **학습에 쓸 쌍이 한 줄도 없었다.** 후자가 ML 플랫폼의 선행 조건이라 더 미룰 수 없었다.
+
+> **인덱스가 둘뿐이다.** `room_id` 단독 인덱스는 두지 않는다 — 복합 인덱스가 `room_id`를 선두로 가져 같은 질의를 커버하고, 둘 다 두면 쓰기가 가장 잦은 표에 죽은 인덱스가 하나 는다. `author_id`도 마찬가지로 지금 그 질의가 없다.
+
+> **쓰기는 동기다.** api가 채팅을 받을 때, 워커가 응답을 발행하기 **직전에** 각각 INSERT한다. Kafka 경유 archiver는 토픽과 워커를 새로 만드는데 부하가 실측된 적이 없다. 대신 **기록 실패가 방송을 끊지 않는다** — 유스케이스가 예외를 삼키고 로그에 남긴다.
+
+> **보존 정책은 아직 없다.** 실제로 쌓이는 속도를 본 뒤에 정한다. 그때 `replied_to`가 FK가 아닌 것이 값을 한다.
 
 ### chat_room_log  *(입장/퇴장, P2)*
 | id | uuid PK | · room_id FK · user_id FK · action varchar(enter/exit) · timestamp |
@@ -267,9 +283,9 @@ LIMIT ?
 
 ## 관계 요약
 
-- user 1—1 wallet · user 1—N (story.author, donation.donor, chat_message_log.sender, credit_transaction)
+- user 1—1 wallet · user 1—N (story.author, donation.donor, chat_message.author, credit_transaction)
 - persona 1—1 (communication_style, moral_compass, personality_trait, tts_settings) · 1—N (persona_core_value, story, like, donation, chat_room)
-- chat_room 1—N (chat_message_log, chat_room_log, donation)
+- chat_room 1—N (chat_message, chat_room_log, donation)
 - payments DB(payment, outbox)는 독립 — 이벤트로만 연결
 
 ## 원칙

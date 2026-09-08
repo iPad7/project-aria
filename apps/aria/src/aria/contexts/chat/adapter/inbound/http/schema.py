@@ -72,3 +72,32 @@ class RoomResponse(SchemaBase):
 class RoomStateResponse(SchemaBase):
     idle: bool
     seconds_since_last: float | None
+
+
+class MessageResponse(SchemaBase):
+    """타임라인 한 줄. 종류에 따라 비는 필드가 있다.
+
+    `replied_to`를 내보내는 것은 화면이 "이 답은 저 댓글에 대한 것"이라고 묶어 보여 줄
+    수 있게 하기 위해서다. 그 값이 곧 학습 쌍의 연결선이기도 하다.
+    """
+
+    id: UUID
+    kind: str
+    text: str
+    author_id: UUID | None
+    persona_id: UUID | None
+    source: str | None
+    amount: int | None
+    replied_to: UUID | None
+    created_at: datetime
+
+
+class MessagePage(SchemaBase):
+    """최신순 한 페이지.
+
+    `next_before`가 있으면 그것을 `before`로 다시 물어 이전 페이지를 얻는다. 오프셋이
+    아니라 커서인 이유: 방송 중에는 새 메시지가 계속 들어와 오프셋이 밀린다.
+    """
+
+    messages: list[MessageResponse]
+    next_before: UUID | None

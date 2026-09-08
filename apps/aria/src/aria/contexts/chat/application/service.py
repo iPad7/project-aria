@@ -19,6 +19,7 @@ HTTP로 보낸 메시지는 방에 나타나지 않았고(전송마다 동작이
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -27,9 +28,12 @@ from aria.contexts.chat.application.generation import GenerationRequestPublisher
 from aria.contexts.chat.application.port.out.activity import ActivityTracker
 from aria.contexts.chat.application.port.out.broadcast import RoomBroadcaster
 from aria.contexts.chat.application.port.out.candidates import CandidateBuffer
-from aria.contexts.chat.domain.message import ChatMessage
+from aria.contexts.chat.application.port.out.transcript import TranscriptRepository
+from aria.contexts.chat.domain.message import RoomMessage
 from aria.contexts.chat.domain.source import ChatSource
 from aria.contexts.chat.domain.topic import Candidate
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -76,19 +80,38 @@ class ChatOrchestrationService:
         generation: GenerationRequestPublisher,
         superchat: SuperchatPort,
         candidates: CandidateBuffer,
+        transcript: TranscriptRepository,
     ) -> None:
         self._activity = activity
         self._broadcaster = broadcaster
         self._generation = generation
         self._superchat = superchat
         self._candidates = candidates
+        self._transcript = transcript
+
+    async def _record(self, message: RoomMessage) -> None:
+        """기록은 **방송을 막지 않는다.**
+
+        DB가 잠깐 흔들렸다고 시청자의 메시지가 거부되거나 후원이 실패하면 안 된다 —
+        기록은 부가 기능이고, 그 사실을 여기서 못박는다. 대신 조용히 넘어가지 않고
+        예외를 그대로 남긴다: 기록이 통째로 비어 있는데 아무도 모르는 것이 최악이다.
+        """
+        try:
+            await self._transcript.append(message)
+        except Exception:  # noqa: BLE001 - 기록 실패가 방송을 끊지 않는다
+            logger.exception(
+                "기록 실패 room_id=%s kind=%s", message.room_id, message.kind.value
+            )
 
     async def handle_user_message(
         self, room_id: UUID, persona_id: UUID, author_id: UUID, text: str
     ) -> MessageOutcome:
         # 도메인 불변식 검증(빈 텍스트·길이 등)은 생성 시점에 걸린다.
-        message = ChatMessage(room_id=room_id, author_id=author_id, text=text)
+        message = RoomMessage.from_viewer(room_id, author_id, text)
         await self._activity.touch(room_id)
+        # 후보로 쌓기 전에 남긴다 — 후보 버퍼는 TTL이라 사라지지만 기록은 남아야 하고,
+        # 선별이 이 id를 가리키므로(`replied_to`) 응답보다 먼저 존재해야 한다.
+        await self._record(message)
 
         await self._broadcaster.publish(
             room_id,
@@ -138,6 +161,9 @@ class ChatOrchestrationService:
             idempotency_key=idempotency_key,
         )
         await self._activity.touch(room_id)
+        await self._record(
+            RoomMessage.from_superchat(room_id, persona_id, donor_id, amount, message)
+        )
 
         await self._broadcaster.publish(
             room_id,
