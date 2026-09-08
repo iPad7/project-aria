@@ -87,7 +87,7 @@ flowchart LR
 | **inference 서빙** | vLLM 멀티-LoRA | 별도 repo(GPU) | GPU 하드 경계 |
 | **llmops** | 데이터셋→SFT→DPO→평가→레지스트리 | 별도 repo(GPU) | 배치·GPU |
 
-> **llmops가 무엇을 학습시킬 것인지는 `docs/persona-modeling.md`.** 요약하면 *연애상담을 잘하는 모델*이 아니라 **시스템 프롬프트에 적힌 인격대로 답하는 모델**이다 — 좁은 도메인 SFT는 도메인을 가중치에 박아 프롬프트로 빼낼 수 없게 만든다. 그 방침이 `persona_prompt.py`의 버티컬 문자열을 페르소나 속성으로 올릴 것을 요구한다.
+> **llmops가 무엇을 학습시킬 것인지는 `docs/persona-modeling.md`.** 요약하면 *연애상담을 잘하는 모델*이 아니라 **시스템 프롬프트로 주어진 페르소나를 읽고 도메인 무관하게 그에 맞춰 답하는 모델**이다 — 단일 도메인 SFT는 도메인과 정체성을 얽어 학습시키기 쉽다. 그 방침이 `persona_prompt.py`의 버티컬 하드코딩을 걷어내고, **방송 주제를 `Persona`가 아니라 `Room`에** 둘 것을 요구한다(페르소나에 두면 `페르소나 ↔ 도메인` 상관이 스키마에서 되살아난다).
 
 **추출 브라이트라인**: 다른 런타임(GPU) 또는 자연 async + 강한 격리 — 이 둘만 서비스. 나머지는 프로세스 타입 스케일.
 
@@ -141,6 +141,8 @@ flowchart LR
 `PersonaLLMPort`(`contexts/chat/application/port/out/llm.py`)가 유일한 접점. 앱은 `persona_id`만 넘기고 모델 버전을 모른다 — 버전 해석은 경계 너머 레지스트리 alias. 어댑터는 `contexts/chat/adapter/outbound/inference`. OpenAI fallback도 같은 포트 뒤.
 
 추론 3역할(모두 OpenAI 호환 → 같은 어댑터, URL 스왑): 운영=vLLM(멀티-LoRA), fallback·로컬 dev=OpenAI, 학습·평가=transformers+trl+peft(별도 repo).
+
+> **멀티-LoRA의 *용도*는 정제됐다**(`docs/persona-modeling.md`). hot-swap 인프라는 그대로지만 어댑터가 "인격마다 하나"는 아니다 — 베이스가 **페르소나 추종**을 배우고(범용 LoRA 1개 + 프로필 프롬프트), 개별 페르소나 어댑터는 프로필만으로 fidelity가 부족할 때 얹는 **확장 수단**이다. 캐릭터마다 어댑터를 두면 인격을 늘리는 일이 다시 배포 주기에 묶인다.
 
 ## 메시징 — 성격이 다른 둘
 
