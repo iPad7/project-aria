@@ -33,6 +33,7 @@ from aria.contexts.chat.application.persona_prompt import system_message
 from aria.contexts.chat.application.port.out.broadcast import RoomBroadcaster
 from aria.contexts.chat.application.port.out.coordinator import ResponseCoordinator
 from aria.contexts.chat.application.port.out.llm import Message, PersonaLLMPort
+from aria.contexts.chat.application.port.out.room import RoomRepository
 from aria.contexts.chat.application.port.out.transcript import TranscriptRepository
 from aria.contexts.chat.domain.message import RoomMessage
 from aria.contexts.chat.domain.source import ChatSource
@@ -167,6 +168,7 @@ class ResponseGenerationService:
         profiles: PersonaProfilePort,
         tracing: TracingPort,
         transcript: TranscriptRepository,
+        rooms: RoomRepository,
     ) -> None:
         self._coordinator = coordinator
         self._llm = llm
@@ -174,6 +176,10 @@ class ResponseGenerationService:
         self._profiles = profiles
         self._tracing = tracing
         self._transcript = transcript
+        # **방송 주제를 읽으려고 방을 안다**(#75). 주제를 요청 페이로드에 실으면
+        # 큐에 남아 있던 옛 요청이 옛 주제로 답한다 — 프로필을 소비 시점에 읽는
+        # 것과 같은 이유로 여기서도 그때 읽는다.
+        self._rooms = rooms
 
     async def handle(self, request: GenerationRequest) -> None:
         # 바깥 span. 어댑터가 못 보는 맥락(어느 방·무엇이 촉발·중복인지)이 여기 있고,
@@ -223,7 +229,7 @@ class ResponseGenerationService:
             result = await self._llm.generate(
                 str(request.persona_id),
                 [
-                    system_message(profile),
+                    system_message(profile, await self._topic_of(request.room_id)),
                     Message(role="user", content=request.prompt),
                 ],
             )
@@ -254,6 +260,19 @@ class ResponseGenerationService:
             trace.set_metadata({"outcome": "published"})
         finally:
             await self._coordinator.release(request.room_id, slot)
+
+    async def _topic_of(self, room_id: UUID) -> str:
+        """이번 방송의 주제. 못 읽으면 빈 문자열 — 주제 때문에 방송이 멈추지 않는다.
+
+        방이 사라졌거나 DB가 흔들려도 인격은 이미 프로필에서 나왔으므로, 주제 한 줄이
+        빠진 응답이 응답이 아예 없는 것보다 낫다.
+        """
+        try:
+            room = await self._rooms.get_by_id(room_id)
+        except Exception:  # noqa: BLE001 - 주제는 부가 정보다
+            logger.exception("방송 주제를 읽지 못했다 room_id=%s", room_id)
+            return ""
+        return room.topic if room is not None else ""
 
     async def _record(
         self, request: GenerationRequest, text: str, model_version: str | None

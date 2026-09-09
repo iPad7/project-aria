@@ -39,6 +39,7 @@ def _to_domain(row: RoomTable) -> Room:
         name=row.name,
         description=row.description,
         thumbnail_url=row.thumbnail_url,
+        topic=row.topic,
         status=RoomStatus(row.status),
         created_at=_aware(row.created_at),
         closed_at=_aware(row.closed_at),
@@ -84,6 +85,7 @@ class SqlModelRoomRepository:
                 name=room.name,
                 description=room.description,
                 thumbnail_url=room.thumbnail_url,
+                topic=room.topic,
                 status=room.status.value,
             )
         )
