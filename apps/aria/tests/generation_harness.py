@@ -12,7 +12,7 @@ C-4-1 이후 응답은 요청이 끝난 뒤 워커가 만들어 방 채널로 �
 
 from __future__ import annotations
 
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from redis.asyncio import Redis
 
@@ -29,6 +29,7 @@ from aria.contexts.chat.application.generation import (
     ResponseGenerationService,
 )
 from aria.contexts.chat.domain.message import RoomMessage
+from aria.contexts.chat.domain.room import Room
 
 
 class DirectEventBus:
@@ -78,6 +79,34 @@ class StubProfiles:
         return self._profile
 
 
+class StubRooms:
+    """`RoomRepository` 스텁 — 워커가 방송 주제를 읽는 경로만 재현한다.
+
+    기본은 **주제 없음**이다. 대부분의 테스트는 주제에 관심이 없고, 그때 프롬프트에는
+    방송 문단이 아예 들어가지 않는다(말투·나침반과 같은 방침).
+    """
+
+    def __init__(self, topic: str = "", *, missing: bool = False) -> None:
+        self._topic = topic
+        self._missing = missing
+        self.asked: list[UUID] = []
+
+    async def get_by_id(self, room_id: UUID) -> Room | None:
+        self.asked.append(room_id)
+        if self._missing:
+            return None
+        return Room(
+            persona_id=uuid4(), host_id=uuid4(), name="테스트 방", topic=self._topic
+        )
+
+    async def add(self, room: Room) -> None: ...
+
+    async def save(self, room: Room) -> None: ...
+
+    async def list_by_status(self, status, *, limit: int, offset: int) -> list[Room]:
+        return []
+
+
 class RecordingTranscript:
     """`TranscriptRepository` 인메모리 구현 — 무엇이 남았는지만 본다.
 
@@ -99,7 +128,9 @@ class RecordingTranscript:
 
 
 def direct_bus(
-    redis: Redis, transcript: RecordingTranscript | None = None
+    redis: Redis,
+    transcript: RecordingTranscript | None = None,
+    rooms: StubRooms | None = None,
 ) -> DirectEventBus:
     """워커의 조립을 테스트용 Redis 하나로 재현한다 — `workers/generation.py`와 같은 모양."""
     return DirectEventBus(
@@ -110,5 +141,6 @@ def direct_bus(
             profiles=StubProfiles(),
             tracing=NoOpTracing(),
             transcript=transcript or RecordingTranscript(),
+            rooms=rooms or StubRooms(),
         )
     )

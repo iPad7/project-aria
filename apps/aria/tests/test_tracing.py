@@ -14,7 +14,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from fakeredis import FakeAsyncRedis, FakeServer
-from generation_harness import RecordingTranscript, StubProfiles
+from generation_harness import RecordingTranscript, StubProfiles, StubRooms
 
 from aria.common.config import Settings, settings
 from aria.common.langfuse_tracing import LangfuseTracing, build_tracing
@@ -118,6 +118,7 @@ def _service(
         profiles=StubProfiles(profile),
         tracing=tracing,
         transcript=RecordingTranscript(),
+        rooms=StubRooms(),
     )
 
 
@@ -235,6 +236,7 @@ async def test_preempted_generation_is_recorded_as_such(
         profiles=StubProfiles(),
         tracing=tracing,
         transcript=RecordingTranscript(),
+        rooms=StubRooms(),
     )
 
     await service.handle(

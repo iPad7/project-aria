@@ -346,3 +346,34 @@ def test_superchat_is_recorded_against_the_rooms_persona(
     # 후원이 **방의** 페르소나 순위에 잡힌다.
     board = client.get(f"/personas/{persona}/ranking").json()
     assert [r["donor_id"] for r in board] == [str(donor)]
+
+
+# --- 방송 주제 (#75) ---------------------------------------------------------
+
+
+def test_a_room_can_be_opened_with_a_topic(client: TestClient) -> None:
+    """주제는 방마다 정해진다 — 같은 페르소나가 오늘은 상담, 내일은 게임을 한다."""
+    resp = client.post(
+        "/rooms",
+        json={
+            "persona_id": str(uuid4()),
+            "name": "오늘의 방송",
+            "topic": "게임 방송",
+        },
+        headers=staff_headers(),
+    )
+
+    assert resp.status_code == 201
+    assert resp.json()["topic"] == "게임 방송"
+
+
+def test_a_room_without_a_topic_is_valid(client: TestClient) -> None:
+    """주제 없는 잡담 방송도 성립한다 — 없으면 빈 문자열이다."""
+    resp = client.post(
+        "/rooms",
+        json={"persona_id": str(uuid4()), "name": "주제 없는 방송"},
+        headers=staff_headers(),
+    )
+
+    assert resp.status_code == 201
+    assert resp.json()["topic"] == ""
