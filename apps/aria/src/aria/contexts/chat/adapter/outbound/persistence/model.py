@@ -26,6 +26,8 @@ class RoomTable(UUIDMixin, TimestampMixin, table=True):
     name: str = Field(max_length=255)
     description: str | None = None
     thumbnail_url: str | None = Field(default=None, max_length=512)
+    # 이번 방송의 주제. 페르소나가 아니라 여기 있는 이유는 `chat/domain/room.py`.
+    topic: str = Field(default="", max_length=100)
     status: str = Field(default="pending", index=True)
     # 방송이 끝난 시각. `updated_at`으로 갈음하지 않는다 — 그쪽은 썸네일만 바꿔도
     # 움직이므로 "언제 끝났나"의 답이 되지 못한다.

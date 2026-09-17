@@ -27,6 +27,9 @@ from aria.contexts.chat.adapter.inbound.worker.router import (
     GenerationConsumer,
 )
 from aria.contexts.chat.adapter.outbound.inference.factory import build_llm
+from aria.contexts.chat.adapter.outbound.persistence.repository import (
+    SqlModelRoomRepository,
+)
 from aria.contexts.chat.adapter.outbound.persistence.transcript import (
     SqlModelTranscriptRepository,
 )
@@ -75,6 +78,9 @@ def create_app() -> FastStream:
         # 응답도 기록에 남는다(#73). 프로필을 읽느라 이미 DB를 알고 있으므로 새 의존이
         # 아니고, 여기가 응답 텍스트를 아는 유일한 자리다.
         transcript=SqlModelTranscriptRepository(session),
+        # 이번 방송의 주제를 읽는다(#75). 요청 페이로드에 실으면 큐에 남아 있던 옛
+        # 요청이 옛 주제로 답하므로, 프로필과 마찬가지로 소비 시점에 읽는다.
+        rooms=SqlModelRoomRepository(session),
     )
     # 배달 보증(멱등·DLQ)은 어댑터가 입힌다 — 위 서비스는 그런 게 있는 줄 모른다.
     consumer = GenerationConsumer(

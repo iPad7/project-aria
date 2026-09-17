@@ -568,3 +568,152 @@ def test_directness_is_bounded(client: TestClient) -> None:
 
 def test_voice_of_unknown_persona_is_not_found(client: TestClient) -> None:
     assert client.get(f"/personas/{uuid4()}/voice").status_code == 404
+
+
+# --- 방송 주제 (#75) ---------------------------------------------------------
+#
+# **이 절이 지키는 것: 인격과 도메인이 프롬프트에서 갈려 있다.**
+#
+# 전에는 모든 페르소나 앞에 "AI 연애상담 스트리머"가 박혀 있었다. 그러면 말투·가치관·
+# 나침반을 아무리 정성껏 넣어도 앞줄이 주제를 고정하고, 학습 데이터에서 페르소나와
+# 도메인을 교차시키는 것이 불가능해진다(`docs/persona-modeling.md`).
+
+
+def test_no_domain_is_hardcoded_into_the_prompt() -> None:
+    """어떤 페르소나도 기본적으로 상담사가 아니다."""
+    assert "연애" not in DEFAULT_SYSTEM
+    assert "상담" not in DEFAULT_SYSTEM
+    assert "연애" not in system_message(_profile(tone="따뜻한")).content
+
+
+def test_the_topic_comes_from_the_broadcast_not_the_persona() -> None:
+    """같은 페르소나가 방송마다 다른 주제를 할 수 있다 — 그게 이 단위의 전부다."""
+    profile = _profile(tone="따뜻하고 나긋한")
+
+    counselling = system_message(profile, "연애 상담").content
+    gaming = system_message(profile, "게임 방송").content
+
+    assert "연애 상담" in counselling
+    assert "게임 방송" in gaming
+    # 인격은 그대로다.
+    assert "따뜻하고 나긋한" in counselling
+    assert "따뜻하고 나긋한" in gaming
+
+
+def test_the_broadcast_is_its_own_paragraph_not_part_of_the_persona() -> None:
+    """ "너는 누구인가"와 "오늘 무엇을 하는가"를 한 덩어리로 주지 않는다.
+
+    섞으면 모델이 주제를 인격의 일부로 읽고, 그러면 페르소나를 바꾸지 않는 한 주제를
+    못 바꾸는 상태로 되돌아간다 — 정확히 이번 단위가 없애려는 것이다.
+    """
+    content = system_message(_profile(tone="따뜻한"), "게임 방송").content
+
+    assert "[이번 방송]" in content
+    # 머리말이 인격 줄들보다 뒤에 온다.
+    assert content.index("말투:") < content.index("[이번 방송]")
+
+
+def test_a_broadcast_without_a_topic_leaves_no_dangling_header() -> None:
+    """주제 없는 방송은 정상이다 — 빈 머리말을 남기지 않는다."""
+    content = system_message(_profile(tone="따뜻한")).content
+
+    assert "[이번 방송]" not in content
+    assert "주제:" not in content
+
+
+def test_a_topic_alone_does_not_make_a_persona() -> None:
+    """주제만 있고 인격이 없으면 폴백이다.
+
+    주제 한 줄로 인격을 대신하면 "주제 = 인격"이라는 등식을 프롬프트가 다시 만든다.
+    """
+    assert system_message(_profile(), "게임 방송").content == DEFAULT_SYSTEM
+
+
+# --- 배선: 워커가 방을 읽는다 ------------------------------------------------
+
+
+async def test_the_worker_reads_the_topic_at_consume_time() -> None:
+    """주제는 요청 페이로드가 아니라 **소비 시점의 방**에서 온다.
+
+    페이로드에 실으면 큐에 남아 있던 옛 요청이 옛 주제로 답한다 — 프로필을 소비
+    시점에 읽는 것과 같은 함정이고, 그래서 같은 방식으로 피한다.
+    """
+    from fakeredis import FakeAsyncRedis, FakeServer
+    from generation_harness import RecordingTranscript, StubProfiles, StubRooms
+
+    from aria.common.tracing import NoOpTracing
+    from aria.contexts.chat.adapter.outbound.redis.coordinator import (
+        RedisResponseCoordinator,
+    )
+    from aria.contexts.chat.application.generation import (
+        GenerationRequest,
+        ResponseGenerationService,
+    )
+    from aria.contexts.chat.application.port.out.llm import LLMResult
+    from aria.contexts.chat.domain.source import ChatSource
+
+    seen: list[str] = []
+
+    class _CapturingLLM:
+        async def generate(self, persona_id, messages, params=None):
+            seen.append(messages[0].content)
+            return LLMResult(text="응답", model_version="stub-1")
+
+    class _NullBroadcaster:
+        async def publish(self, room_id, frame) -> None: ...
+
+    room = uuid4()
+    rooms = StubRooms("게임 방송")
+    redis = FakeAsyncRedis(server=FakeServer(), decode_responses=True)
+
+    await ResponseGenerationService(
+        coordinator=RedisResponseCoordinator(redis),
+        llm=_CapturingLLM(),
+        broadcaster=_NullBroadcaster(),
+        profiles=StubProfiles(_profile(tone="장난기 있는")),
+        tracing=NoOpTracing(),
+        transcript=RecordingTranscript(),
+        rooms=rooms,
+    ).handle(GenerationRequest.create(room, uuid4(), ChatSource.IDLE, "안녕"))
+
+    assert rooms.asked == [room]  # 요청이 아니라 방에서 읽었다
+    assert "게임 방송" in seen[0]
+    assert "장난기 있는" in seen[0]
+
+
+async def test_an_unreadable_room_does_not_stop_the_broadcast() -> None:
+    """방을 못 읽어도 인격은 이미 프로필에서 나왔다 — 주제 한 줄 때문에 침묵하지 않는다."""
+    from fakeredis import FakeAsyncRedis, FakeServer
+    from generation_harness import RecordingTranscript, StubProfiles, StubRooms
+
+    from aria.common.tracing import NoOpTracing
+    from aria.contexts.chat.adapter.outbound.redis.coordinator import (
+        RedisResponseCoordinator,
+    )
+    from aria.contexts.chat.application.generation import (
+        GenerationRequest,
+        ResponseGenerationService,
+    )
+    from aria.contexts.chat.domain.source import ChatSource
+
+    published: list[dict] = []
+
+    class _RecordingBroadcaster:
+        async def publish(self, room_id, frame) -> None:
+            published.append(frame)
+
+    from aria.contexts.chat.adapter.outbound.inference.stub import StubPersonaLLM
+
+    redis = FakeAsyncRedis(server=FakeServer(), decode_responses=True)
+
+    await ResponseGenerationService(
+        coordinator=RedisResponseCoordinator(redis),
+        llm=StubPersonaLLM(),
+        broadcaster=_RecordingBroadcaster(),
+        profiles=StubProfiles(_profile(tone="따뜻한")),
+        tracing=NoOpTracing(),
+        transcript=RecordingTranscript(),
+        rooms=StubRooms(missing=True),
+    ).handle(GenerationRequest.create(uuid4(), uuid4(), ChatSource.IDLE, "안녕"))
+
+    assert [f["type"] for f in published] == ["reply"]

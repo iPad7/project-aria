@@ -18,6 +18,7 @@ from generation_harness import (
     RecordingEventBus,
     RecordingTranscript,
     StubProfiles,
+    StubRooms,
     direct_bus,
 )
 from room_harness import live_room
@@ -400,6 +401,7 @@ async def test_preempted_reply_is_never_published(redis: FakeAsyncRedis) -> None
         profiles=StubProfiles(),
         tracing=NoOpTracing(),
         transcript=RecordingTranscript(),
+        rooms=StubRooms(),
     )
 
     await worker.handle(_request(room))
@@ -418,6 +420,7 @@ async def test_unpreempted_reply_is_published(redis: FakeAsyncRedis) -> None:
         profiles=StubProfiles(),
         tracing=NoOpTracing(),
         transcript=RecordingTranscript(),
+        rooms=StubRooms(),
     )
 
     await worker.handle(_request(room))
@@ -439,6 +442,7 @@ async def test_worker_skips_generation_without_a_slot(redis: FakeAsyncRedis) -> 
         profiles=StubProfiles(),
         tracing=NoOpTracing(),
         transcript=RecordingTranscript(),
+        rooms=StubRooms(),
     )
     await coordinator.try_acquire(room, ChatSource.SUPERCHAT)  # 이미 점유 중
 
@@ -460,6 +464,7 @@ async def test_worker_releases_the_slot_after_generating(
         profiles=StubProfiles(),
         tracing=NoOpTracing(),
         transcript=RecordingTranscript(),
+        rooms=StubRooms(),
     )
 
     await worker.handle(_request(room))
@@ -527,6 +532,7 @@ async def test_superchat_stands_even_if_no_response_ever_comes(
         profiles=StubProfiles(),
         tracing=NoOpTracing(),
         transcript=RecordingTranscript(),
+        rooms=StubRooms(),
     )
     await worker.handle(GenerationRequest.from_payload(events.published[0].payload))
 

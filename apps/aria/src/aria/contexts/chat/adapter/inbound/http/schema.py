@@ -55,6 +55,8 @@ class OpenRoomRequest(SchemaBase):
     name: str = Field(min_length=1, max_length=255)
     description: str | None = None
     thumbnail_url: str | None = Field(default=None, max_length=512)
+    # 이번 방송에서 무엇을 하는가 — "연애 상담", "게임", "잡담". 없어도 된다.
+    topic: str = Field(default="", max_length=100)
 
 
 class RoomResponse(SchemaBase):
@@ -64,6 +66,7 @@ class RoomResponse(SchemaBase):
     name: str
     description: str | None
     thumbnail_url: str | None
+    topic: str
     status: str
     # 끝난 방송만 값이 있다. 아카이브·목록에서 "언제 끝났나"를 답한다.
     closed_at: datetime | None

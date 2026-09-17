@@ -55,6 +55,15 @@ class Room(Entity):
     name: str = Field(min_length=1, max_length=255)
     description: str | None = None
     thumbnail_url: str | None = Field(default=None, max_length=512)
+    # **이번 방송에서 무엇을 하는가** — "연애 상담", "게임", "잡담".
+    #
+    # 페르소나가 아니라 방에 둔다. 페르소나에 두면 "A는 늘 연애상담"이라는 상관이
+    # 생기고, 그건 학습 데이터에서 도메인과 인격을 도로 붙여 버린다 — 애초에
+    # 떼어내려던 것이다(`docs/persona-modeling.md`).
+    #
+    # 없어도 방송은 성립한다. 주제 없는 잡담 방송을 표현할 수 없으면 안 되고,
+    # 기존 방들도 그대로 돌아야 한다.
+    topic: str = Field(default="", max_length=100)
     status: RoomStatus = RoomStatus.PENDING
     # 개설 시각. 방치 판정의 바닥이다 — 활동 기록이 아직 없는 방을 "오래 조용했다"고
     # 오해하지 않으려면 언제부터 셀지가 필요하다.

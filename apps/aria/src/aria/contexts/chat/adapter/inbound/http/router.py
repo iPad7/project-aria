@@ -51,6 +51,7 @@ def _to_room_response(room: Room) -> RoomResponse:
         name=room.name,
         description=room.description,
         thumbnail_url=room.thumbnail_url,
+        topic=room.topic,
         status=room.status.value,
         closed_at=room.closed_at,
     )
@@ -76,6 +77,7 @@ async def open_room(
         name=body.name,
         description=body.description,
         thumbnail_url=body.thumbnail_url,
+        topic=body.topic,
     )
     return _to_room_response(room)
 

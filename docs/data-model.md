@@ -160,6 +160,7 @@ LIMIT ?
 | thumbnail_url | varchar(512) | nullable |
 | status | varchar | default 'pending' — pending/live/finished, index |
 | closed_at | timestamptz | nullable — 방송이 끝난 시각 |
+| topic | varchar(100) | not null, default `''` — **이번 방송의 주제** |
 | created_at / updated_at | timestamptz | `ix_chat_room_status_created` (status, created_at DESC) |
 | — | — | `uq_chat_room_live_persona` **부분 유일**: unique(persona_id) WHERE status='live' |
 
@@ -168,6 +169,10 @@ LIMIT ?
 > **상태 전이는 전진만 한다**(`pending → live → finished`, pending에서 바로 finished도 가능). 되돌리기를 허용하면 "끝난 방송이 다시 살아나는" 상태가 생기는데 시청자에게도 정산에도 아카이브에도 설명할 수 없다. 다시 하려면 새 방을 연다.
 
 > **`closed_at`은 `updated_at`으로 갈음할 수 없다.** 처음에는 그렇게 뒀는데, 방을 자동으로 닫는 규칙이 생기면서 "언제 끝났나"가 실제로 필요해졌다 — `updated_at`은 썸네일만 바꿔도 움직이므로 그 답이 되지 못한다. 값은 도메인의 `transition_to(FINISHED)`가 찍는다: 종료 경로가 둘(운영자의 finish, 방치 정리)이라 호출자에게 맡기면 한쪽이 빠뜨린다.
+
+> **`topic`은 페르소나가 아니라 방에 있다**(#75). 전에는 시스템 프롬프트가 모든 페르소나를 "AI 연애상담 스트리머"로 못박았다. 주제를 `persona`로 올리면 하드코딩은 없어지지만 `페르소나 ↔ 도메인` 상관이 스키마에 남고, 학습 데이터에서 그 둘을 교차시킬 수 없게 된다(`docs/persona-modeling.md`). 방이 곧 방송 세션이므로 "오늘 무엇을 하는가"는 여기가 제자리다. **`persona.default_topic`도 두지 않는다** — 약한 형태로 같은 상관이 되살아난다.
+>
+> 비어 있는 것이 정상이다(주제 없는 잡담 방송). 기존 방들 때문에 `server_default=''`로 추가했다 — 없이 NOT NULL을 붙이면 채울 값이 없어 마이그레이션이 거부된다.
 
 > **`hls_url`은 아직 없다.** 값이 생기는 시점이 미디어 송출이 붙을 때라 그때 함께 넣는다 — 지금 넣으면 영원히 NULL인 컬럼이 된다.
 

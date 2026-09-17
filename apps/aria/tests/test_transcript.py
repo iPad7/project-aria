@@ -335,7 +335,7 @@ async def test_a_reply_is_recorded_before_it_is_broadcast(room: UUID) -> None:
     새로고침하면 사라지는 응답이라 눈에 보인다.
     """
     from fakeredis import FakeAsyncRedis, FakeServer
-    from generation_harness import StubProfiles
+    from generation_harness import StubProfiles, StubRooms
 
     from aria.common.tracing import NoOpTracing
     from aria.contexts.chat.adapter.outbound.inference.stub import StubPersonaLLM
@@ -368,6 +368,7 @@ async def test_a_reply_is_recorded_before_it_is_broadcast(room: UUID) -> None:
         profiles=StubProfiles(),
         tracing=NoOpTracing(),
         transcript=_OrderedTranscript(),
+        rooms=StubRooms(),
     ).handle(GenerationRequest.create(room, uuid4(), ChatSource.IDLE, "무슨 말이든"))
 
     assert order == ["recorded", "broadcast"]
@@ -375,7 +376,7 @@ async def test_a_reply_is_recorded_before_it_is_broadcast(room: UUID) -> None:
 
 async def test_a_failed_recording_still_lets_the_persona_speak(room: UUID) -> None:
     from fakeredis import FakeAsyncRedis, FakeServer
-    from generation_harness import StubProfiles
+    from generation_harness import StubProfiles, StubRooms
 
     from aria.common.tracing import NoOpTracing
     from aria.contexts.chat.adapter.outbound.inference.stub import StubPersonaLLM
@@ -397,6 +398,7 @@ async def test_a_failed_recording_still_lets_the_persona_speak(room: UUID) -> No
         profiles=StubProfiles(),
         tracing=NoOpTracing(),
         transcript=_BrokenTranscript(),
+        rooms=StubRooms(),
     ).handle(GenerationRequest.create(room, uuid4(), ChatSource.IDLE, "무슨 말이든"))
 
     assert [f["type"] for f in broadcaster.frames] == ["reply"]
@@ -405,7 +407,7 @@ async def test_a_failed_recording_still_lets_the_persona_speak(room: UUID) -> No
 async def test_the_selected_comment_becomes_replied_to(room: UUID) -> None:
     """#63의 선별 결과가 기록의 연결선이 된다 — 학습 쌍이 여기서 만들어진다."""
     from fakeredis import FakeAsyncRedis, FakeServer
-    from generation_harness import RecordingTranscript, StubProfiles
+    from generation_harness import RecordingTranscript, StubProfiles, StubRooms
 
     from aria.common.tracing import NoOpTracing
     from aria.contexts.chat.adapter.outbound.inference.stub import StubPersonaLLM
@@ -428,6 +430,7 @@ async def test_the_selected_comment_becomes_replied_to(room: UUID) -> None:
         profiles=StubProfiles(),
         tracing=NoOpTracing(),
         transcript=recorded,
+        rooms=StubRooms(),
     ).handle(
         GenerationRequest.create(
             room,

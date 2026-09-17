@@ -17,11 +17,15 @@ from __future__ import annotations
 from aria.common.persona_profile import PersonaProfile
 from aria.contexts.chat.application.port.out.llm import Message
 
-# 프로필이 없는 페르소나의 폴백. 이 서비스가 무엇을 하는 곳인지만 말해 준다.
-# 기존 페르소나에는 말투가 없으므로 여기서 거부하면 전부 죽는다.
+# 프로필이 없는 페르소나의 폴백. 기존 페르소나에는 말투가 없으므로 여기서 거부하면
+# 전부 죽는다.
+#
+# **도메인을 말하지 않는다.** 전에는 "연애 상담을 해 주는 AI 페르소나"였는데, 그러면
+# 인격도 주제도 설정되지 않은 방송이 조용히 상담사가 된다. 무엇을 하는 방송인지는
+# 방이 정하고(`Room.topic`), 여기는 그것도 없을 때의 최소한이다(#75).
 DEFAULT_SYSTEM = (
-    "너는 연애 상담을 해 주는 AI 페르소나다. 시청자의 사연에 공감하며 "
-    "따뜻하고 구체적으로, 한국어로 답한다."
+    "너는 시청자와 실시간으로 이야기하는 AI 스트리머다. "
+    "시청자의 말에 성의 있게, 한국어로 답한다."
 )
 
 # directness 1~5를 문장으로. 숫자를 그대로 프롬프트에 넣으면 모델이 그 척도가
@@ -35,8 +39,8 @@ _DIRECTNESS: dict[int, str] = {
 }
 
 
-def _lines(profile: PersonaProfile) -> list[str]:
-    out = [f"너는 '{profile.name}'이라는 이름의 AI 연애상담 스트리머다."]
+def _lines(profile: PersonaProfile, topic: str) -> list[str]:
+    out = [f"너는 '{profile.name}'이라는 이름의 AI 스트리머다."]
     if profile.description:
         out.append(profile.description)
 
@@ -60,9 +64,25 @@ def _lines(profile: PersonaProfile) -> list[str]:
         out.append("가치가 서로 부딪히면 앞선 가치를 따른다.")
 
     out.extend(_compass_lines(profile))
+    out.extend(_broadcast_lines(topic))
 
     out.append("한국어로 답한다.")
     return out
+
+
+def _broadcast_lines(topic: str) -> list[str]:
+    """이번 방송의 맥락 — **인격과 한 문단에 섞지 않는다.**
+
+    앞의 것들("너는 누구인가")과 이것("오늘 무엇을 하는가")은 성격이 다르다. 섞어
+    한 덩어리로 주면 모델이 주제를 인격의 일부로 읽고, 그러면 페르소나를 바꾸지 않는
+    한 주제를 못 바꾸는 상태로 되돌아간다 — 정확히 이번 단위가 없애려는 것이다.
+    나침반을 가치관과 분리한 것과 같은 이유이고, 학습 데이터에서 페르소나와 도메인을
+    교차시키려면 프롬프트에서도 둘이 구분돼 보여야 한다(`docs/persona-modeling.md`).
+    """
+    if not topic:
+        # 주제 없는 방송은 정상이다 — 말투·나침반과 같은 방침으로, 없으면 안 넣는다.
+        return []
+    return ["[이번 방송]", f"주제: {topic}"]
 
 
 def _compass_lines(profile: PersonaProfile) -> list[str]:
@@ -86,12 +106,15 @@ def _compass_lines(profile: PersonaProfile) -> list[str]:
     return out
 
 
-def system_message(profile: PersonaProfile | None) -> Message:
-    """프로필을 시스템 메시지로. 없거나 비어 있으면 공통 프롬프트.
+def system_message(profile: PersonaProfile | None, topic: str = "") -> Message:
+    """프로필과 이번 방송의 주제를 시스템 메시지로.
 
     `None`(그런 페르소나가 없음)과 `has_voice()` False(말투 미설정)를 같게 다룬다 —
     둘 다 "이 페르소나답게 말할 재료가 없다"이고, 방송을 멈출 이유는 아니다.
+
+    **주제만 있고 인격이 없는 경우는 폴백으로 간다.** 주제 한 줄로 인격을 대신할 수는
+    없고, 그렇게 하면 "주제 = 인격"이라는 등식을 프롬프트가 다시 만든다.
     """
     if profile is None or not profile.has_voice():
         return Message(role="system", content=DEFAULT_SYSTEM)
-    return Message(role="system", content="\n".join(_lines(profile)))
+    return Message(role="system", content="\n".join(_lines(profile, topic)))

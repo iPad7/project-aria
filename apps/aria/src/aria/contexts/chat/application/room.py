@@ -45,6 +45,7 @@ class RoomService:
         *,
         description: str | None = None,
         thumbnail_url: str | None = None,
+        topic: str = "",
     ) -> Room:
         room = Room(
             persona_id=persona_id,
@@ -52,6 +53,7 @@ class RoomService:
             name=name,
             description=description,
             thumbnail_url=thumbnail_url,
+            topic=topic,
         )
         await self._rooms.add(room)
         return room
